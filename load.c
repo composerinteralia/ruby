@@ -635,11 +635,14 @@ rb_load_internal0(rb_execution_context_t *ec, VALUE fname, int wrap)
     return state;
 }
 
+#include <stdio.h>
+
 static void
 rb_load_internal(VALUE fname, int wrap)
 {
     rb_execution_context_t *ec = GET_EC();
     int state = rb_load_internal0(ec, fname, wrap);
+    rb_provide_feature(fname);
     if (state) {
 	if (state == TAG_RAISE) rb_exc_raise(ec->errinfo);
 	EC_JUMP_TAG(ec, state);
