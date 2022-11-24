@@ -8,12 +8,13 @@
  *             file COPYING are met.  Consult the file for details.
  * @brief      Internal header for Numeric.
  */
-#include "internal/bignum.h"    /* for BIGNUM_POSITIVE_P */
-#include "internal/bits.h"      /* for RUBY_BIT_ROTL */
-#include "internal/fixnum.h"    /* for FIXNUM_POSITIVE_P */
-#include "internal/vm.h"        /* for rb_method_basic_definition_p */
-#include "ruby/intern.h"        /* for rb_cmperr */
-#include "ruby/ruby.h"          /* for USE_FLONUM */
+#include "internal/bignum.h"          /* for BIGNUM_POSITIVE_P */
+#include "internal/bits.h"            /* for RUBY_BIT_ROTL */
+#include "internal/fixnum.h"          /* for FIXNUM_POSITIVE_P */
+#include "internal/basic_operators.h" /* for BASIC_OP_UNREDEFINED_P */
+#include "internal/vm.h"              /* for rb_method_basic_definition_p */
+#include "ruby/intern.h"              /* for rb_cmperr */
+#include "ruby/ruby.h"                /* for USE_FLONUM */
 
 #define ROUND_TO(mode, even, up, down) \
     ((mode) == RUBY_NUM_ROUND_HALF_EVEN ? even : \
@@ -171,11 +172,11 @@ rb_num_positive_int_p(VALUE num)
     const ID mid = '>';
 
     if (FIXNUM_P(num)) {
-        if (rb_method_basic_definition_p(rb_cInteger, mid))
+        if (BASIC_OP_UNREDEFINED_P(BOP_GT, INTEGER_REDEFINED_OP_FLAG))
             return FIXNUM_POSITIVE_P(num);
     }
     else if (RB_TYPE_P(num, T_BIGNUM)) {
-        if (rb_method_basic_definition_p(rb_cInteger, mid))
+        if (BASIC_OP_UNREDEFINED_P(BOP_GT, INTEGER_REDEFINED_OP_FLAG))
             return BIGNUM_POSITIVE_P(num);
     }
     return RTEST(rb_num_compare_with_zero(num, mid));
@@ -187,11 +188,11 @@ rb_num_negative_int_p(VALUE num)
     const ID mid = '<';
 
     if (FIXNUM_P(num)) {
-        if (rb_method_basic_definition_p(rb_cInteger, mid))
+        if (BASIC_OP_UNREDEFINED_P(BOP_LT, INTEGER_REDEFINED_OP_FLAG))
             return FIXNUM_NEGATIVE_P(num);
     }
     else if (RB_TYPE_P(num, T_BIGNUM)) {
-        if (rb_method_basic_definition_p(rb_cInteger, mid))
+        if (BASIC_OP_UNREDEFINED_P(BOP_LT, INTEGER_REDEFINED_OP_FLAG))
             return BIGNUM_NEGATIVE_P(num);
     }
     return RTEST(rb_num_compare_with_zero(num, mid));

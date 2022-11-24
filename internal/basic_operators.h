@@ -1,7 +1,6 @@
 #ifndef INTERNAL_BOP_H                                /*-*-C-*-vi:se ft=c:*/
 #define INTERNAL_BOP_H
 
-#include "internal.h"
 #include "ruby/internal/dllexport.h"
 
 enum ruby_basic_operators {
@@ -60,6 +59,6 @@ RUBY_EXTERN short ruby_vm_redefined_flag[BOP_LAST_];
 #define FALSE_REDEFINED_OP_FLAG  (1 << 11)
 #define PROC_REDEFINED_OP_FLAG   (1 << 12)
 
-#define BASIC_OP_UNREDEFINED_P(op, klass) (LIKELY((ruby_vm_redefined_flag[(op)]&(klass)) == 0))
+#define BASIC_OP_UNREDEFINED_P(op, klass) (RB_LIKELY((ruby_vm_redefined_flag[(op)]&(klass)) == 0))
 
 #endif

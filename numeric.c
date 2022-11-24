@@ -284,8 +284,6 @@ rb_num_to_uint(VALUE val, unsigned int *ret)
     return NUMERR_TYPE;
 }
 
-#define method_basic_p(klass) rb_method_basic_definition_p(klass, mid)
-
 static inline int
 int_pos_p(VALUE num)
 {
@@ -881,11 +879,11 @@ num_positive_p(VALUE num)
     const ID mid = '>';
 
     if (FIXNUM_P(num)) {
-        if (method_basic_p(rb_cInteger))
+        if (BASIC_OP_UNREDEFINED_P(BOP_GT, INTEGER_REDEFINED_OP_FLAG))
             return RBOOL((SIGNED_VALUE)num > (SIGNED_VALUE)INT2FIX(0));
     }
     else if (RB_BIGNUM_TYPE_P(num)) {
-        if (method_basic_p(rb_cInteger))
+        if (BASIC_OP_UNREDEFINED_P(BOP_GT, INTEGER_REDEFINED_OP_FLAG))
             return RBOOL(BIGNUM_POSITIVE_P(num) && !rb_bigzero_p(num));
     }
     return rb_num_compare_with_zero(num, mid);
@@ -2904,16 +2902,15 @@ ruby_num_interval_step_size(VALUE from, VALUE to, VALUE step, int excl)
 static int
 num_step_negative_p(VALUE num)
 {
-    const ID mid = '<';
     VALUE zero = INT2FIX(0);
     VALUE r;
 
     if (FIXNUM_P(num)) {
-        if (method_basic_p(rb_cInteger))
+        if (BASIC_OP_UNREDEFINED_P(BOP_LT, INTEGER_REDEFINED_OP_FLAG))
             return (SIGNED_VALUE)num < 0;
     }
     else if (RB_BIGNUM_TYPE_P(num)) {
-        if (method_basic_p(rb_cInteger))
+        if (BASIC_OP_UNREDEFINED_P(BOP_LT, INTEGER_REDEFINED_OP_FLAG))
             return BIGNUM_NEGATIVE_P(num);
     }
 
