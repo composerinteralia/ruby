@@ -1178,6 +1178,20 @@ opt_eq
     }
 }
 
+/* optimized X===Y. */
+DEFINE_INSN
+opt_eqq
+(CALL_DATA cd)
+(VALUE recv, VALUE obj)
+(VALUE val)
+{
+    val = opt_case_equality(GET_ISEQ(), recv, obj, cd);
+
+    if (val == Qundef) {
+        CALL_SIMPLE_METHOD();
+    }
+}
+
 /* optimized X!=Y. */
 DEFINE_INSN
 opt_neq

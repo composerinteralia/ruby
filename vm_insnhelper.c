@@ -2289,6 +2289,22 @@ opt_equality(const rb_iseq_t *cd_owner, VALUE recv, VALUE obj, CALL_DATA cd)
 
 #undef EQ_UNREDEFINED_P
 
+#define EQQ_UNREDEFINED_P(t) BASIC_OP_UNREDEFINED_P(BOP_EQQ, t##_REDEFINED_OP_FLAG)
+
+static VALUE
+opt_case_equality(const rb_iseq_t *cd_owner, VALUE recv, VALUE obj, CALL_DATA cd)
+{
+  if (FIXNUM_2_P(recv, obj) && EQQ_UNREDEFINED_P(INTEGER)) {
+    return RBOOL(recv == obj);
+  }
+  else if (SYMBOL_P(recv) && EQQ_UNREDEFINED_P(SYMBOL)) {
+    return RBOOL(recv == obj);
+  }
+  return Qundef;
+}
+
+#undef EQQ_UNREDEFINED_P
+
 #ifndef MJIT_HEADER
 
 static inline const struct rb_callcache *gccct_method_search(rb_execution_context_t *ec, VALUE recv, ID mid, int argc); // vm_eval.c
