@@ -2236,7 +2236,22 @@ opt_equality_specialized(VALUE recv, VALUE obj)
     else if (FLONUM_2_P(recv, obj) && EQ_UNREDEFINED_P(FLOAT)) {
         goto compare_by_identity;
     }
-    else if (STATIC_SYM_P(recv) && STATIC_SYM_P(obj) && EQ_UNREDEFINED_P(SYMBOL)) {
+    else if (SYMBOL_P(recv) && EQ_UNREDEFINED_P(SYMBOL)) {
+      // Still fast path
+      //
+      // [:static_sym].include? :other_static_sym
+      // [:static_sym].eql? [:other_static_sym]
+      // [:static_sym] - [:other_static_sym]
+      //
+      // Used to be slow path, now fast:
+      //
+      // [:static_sym].include? any_object
+      // [:static_sym].eql? [any_object]
+      // [:static_sym] - [any_object]
+      //
+      // [:"#{"dynamic_sym"}"].include? any_object
+      // [:"#{"dynamic_sym"}"].eql? [any_object]
+      // [:"#{"dynamic_sym"}"] - [any_object]
         goto compare_by_identity;
     }
     else if (SPECIAL_CONST_P(recv)) {
@@ -2312,9 +2327,11 @@ opt_equality_by_mid(VALUE recv, VALUE obj, ID mid)
 {
     VALUE val = opt_equality_specialized(recv, obj);
     if (!UNDEF_P(val)) {
+      /* fprintf(stderr, "FAST\n"); */
         return val;
     }
     else {
+      /* fprintf(stderr, "SLOW\n"); */
         return opt_equality_by_mid_slowpath(recv, obj, mid);
     }
 }

@@ -1,0 +1,10 @@
+benchmark:
+  static_with_static.include: "[:static_sym].include? :other_static_sym"
+  static_with_static.eql:     "[:static_sym].eql? [:other_static_sym]"
+  static_with_static.minus:   "[:static_sym] - [:other_static_sym]"
+  static_with_other.include: "[:static_sym].include? 1"
+  static_with_other.eql:     "[:static_sym].eql? [1]"
+  static_with_other.minus:   "[:static_sym] - [1]"
+  dynamic.include: '[:"#{"dynamic_sym"}"].include? :anything'
+  dynamic.eql:     '[:"#{"dynamic_sym"}"].eql? [:anything]'
+  dynamic.minus:   '[:"#{"dynamic_sym"}"] - [:anything]'
