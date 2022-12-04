@@ -2236,7 +2236,17 @@ opt_equality_specialized(VALUE recv, VALUE obj)
     else if (FLONUM_2_P(recv, obj) && EQ_UNREDEFINED_P(FLOAT)) {
         goto compare_by_identity;
     }
+    // I think we can do the fast path if recv is any kind of symbol
     else if (STATIC_SYM_P(recv) && STATIC_SYM_P(obj) && EQ_UNREDEFINED_P(SYMBOL)) {
+        goto compare_by_identity;
+    }
+    else if (NIL_P(recv) && EQ_UNREDEFINED_P(NIL)) {
+        goto compare_by_identity;
+    }
+    else if (recv == Qtrue && EQ_UNREDEFINED_P(TRUE)) {
+        goto compare_by_identity;
+    }
+    else if (recv == Qfalse && EQ_UNREDEFINED_P(FALSE)) {
         goto compare_by_identity;
     }
     else if (SPECIAL_CONST_P(recv)) {
@@ -2294,12 +2304,42 @@ opt_equality(const rb_iseq_t *cd_owner, VALUE recv, VALUE obj, CALL_DATA cd)
 static VALUE
 opt_case_equality(const rb_iseq_t *cd_owner, VALUE recv, VALUE obj, CALL_DATA cd)
 {
-  if (FIXNUM_2_P(recv, obj) && EQQ_UNREDEFINED_P(INTEGER)) {
+  if (NIL_P(recv) && EQQ_UNREDEFINED_P(NIL)) {
+    return RBOOL(recv == obj);
+  }
+  else if (recv == Qtrue && EQQ_UNREDEFINED_P(TRUE)) {
+    return RBOOL(recv == obj);
+  }
+  else if (recv == Qfalse && EQQ_UNREDEFINED_P(FALSE)) {
     return RBOOL(recv == obj);
   }
   else if (SYMBOL_P(recv) && EQQ_UNREDEFINED_P(SYMBOL)) {
     return RBOOL(recv == obj);
   }
+
+  // I might need to make sure these don't make funcalls or something,
+  // since we might not be set up for that.
+  // Maybe easier to check if just flonum or just fixnum
+  else if (FIXNUM_P(recv) && EQQ_UNREDEFINED_P(INTEGER)) {
+    if (FIXNUM_P(obj) || RB_BIGNUM_TYPE_P(obj) || RB_FLOAT_TYPE_P(obj)) {
+      return rb_int_equal(recv, obj);
+    }
+    return Qundef;
+  }
+  else if (FLONUM_P(recv) && EQQ_UNREDEFINED_P(FLOAT)) {
+    return rb_float_equal(recv, obj);
+  }
+  // Ensure both art strings?
+  else if (RB_TYPE_P(recv, T_STRING) && EQQ_UNREDEFINED_P(STRING)) {
+    return rb_str_equal(recv, obj);
+  }
+
+  /* if (FIXNUM_2_P(recv, obj) && EQQ_UNREDEFINED_P(INTEGER)) { */
+  /*   return RBOOL(recv == obj); */
+  /* } */
+  /* else if (SYMBOL_P(recv) && EQQ_UNREDEFINED_P(SYMBOL)) { */
+  /*   return RBOOL(recv == obj); */
+  /* } */
   return Qundef;
 }
 
