@@ -18,6 +18,7 @@
 #include "id.h"
 #include "internal.h"
 #include "internal/array.h"
+#include "internal/basic_operators.h"
 #include "internal/class.h"
 #include "internal/complex.h"
 #include "internal/math.h"
@@ -71,7 +72,7 @@ inline static VALUE
 f_add(VALUE x, VALUE y)
 {
     if (RB_INTEGER_TYPE_P(x) &&
-        LIKELY(rb_method_basic_definition_p(rb_cInteger, idPLUS))) {
+        LIKELY(BASIC_OP_UNREDEFINED_P(BOP_PLUS, INTEGER_REDEFINED_OP_FLAG))) {
         if (FIXNUM_ZERO_P(x))
             return y;
         if (FIXNUM_ZERO_P(y))
@@ -79,7 +80,7 @@ f_add(VALUE x, VALUE y)
         return rb_int_plus(x, y);
     }
     else if (RB_FLOAT_TYPE_P(x) &&
-             LIKELY(rb_method_basic_definition_p(rb_cFloat, idPLUS))) {
+             LIKELY(BASIC_OP_UNREDEFINED_P(BOP_PLUS, FLOAT_REDEFINED_OP_FLAG))) {
         if (FIXNUM_ZERO_P(y))
             return x;
         return rb_float_plus(x, y);
@@ -123,7 +124,7 @@ inline static VALUE
 f_mul(VALUE x, VALUE y)
 {
     if (RB_INTEGER_TYPE_P(x) &&
-        LIKELY(rb_method_basic_definition_p(rb_cInteger, idMULT))) {
+        LIKELY(BASIC_OP_UNREDEFINED_P(BOP_MULT, INTEGER_REDEFINED_OP_FLAG))) {
         if (FIXNUM_ZERO_P(y))
             return ZERO;
         if (FIXNUM_ZERO_P(x) && RB_INTEGER_TYPE_P(y))
@@ -133,7 +134,7 @@ f_mul(VALUE x, VALUE y)
         return rb_int_mul(x, y);
     }
     else if (RB_FLOAT_TYPE_P(x) &&
-             LIKELY(rb_method_basic_definition_p(rb_cFloat, idMULT))) {
+             LIKELY(BASIC_OP_UNREDEFINED_P(BOP_MULT, FLOAT_REDEFINED_OP_FLAG))) {
         if (y == ONE) return x;
         return rb_float_mul(x, y);
     }
