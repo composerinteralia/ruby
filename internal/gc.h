@@ -69,17 +69,17 @@ rb_gc_debug_body(const char *mode, const char *msg, int st, void *ptr)
     fflush(stdout);
 }
 
-#define RUBY_MARK_ENTER(msg) rb_gc_debug_body("mark", (msg), 1, ptr)
-#define RUBY_MARK_LEAVE(msg) rb_gc_debug_body("mark", (msg), 0, ptr)
-#define RUBY_FREE_ENTER(msg) rb_gc_debug_body("free", (msg), 1, ptr)
-#define RUBY_FREE_LEAVE(msg) rb_gc_debug_body("free", (msg), 0, ptr)
+#define RUBY_MARK_ENTER(msg, ptr) rb_gc_debug_body("mark", (msg), 1, ptr)
+#define RUBY_MARK_LEAVE(msg, ptr) rb_gc_debug_body("mark", (msg), 0, ptr)
+#define RUBY_FREE_ENTER(msg, ptr) rb_gc_debug_body("free", (msg), 1, ptr)
+#define RUBY_FREE_LEAVE(msg, ptr) rb_gc_debug_body("free", (msg), 0, ptr)
 #define RUBY_GC_INFO         rb_gc_debug_indent(), ruby_debug_printf
 
 #else
-#define RUBY_MARK_ENTER(msg)
-#define RUBY_MARK_LEAVE(msg)
-#define RUBY_FREE_ENTER(msg)
-#define RUBY_FREE_LEAVE(msg)
+#define RUBY_MARK_ENTER(msg, ptr)
+#define RUBY_MARK_LEAVE(msg, ptr)
+#define RUBY_FREE_ENTER(msg, ptr)
+#define RUBY_FREE_LEAVE(msg, ptr)
 #define RUBY_GC_INFO if(0)printf
 #endif
 

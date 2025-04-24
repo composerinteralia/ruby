@@ -161,7 +161,7 @@ iseq_clear_ic_references(const rb_iseq_t *iseq)
 void
 rb_iseq_free(const rb_iseq_t *iseq)
 {
-    RUBY_FREE_ENTER("iseq");
+    RUBY_FREE_ENTER("iseq", (void *)iseq);
 
     if (iseq && ISEQ_BODY(iseq)) {
         iseq_clear_ic_references(iseq);
@@ -208,7 +208,7 @@ rb_iseq_free(const rb_iseq_t *iseq)
         rb_hook_list_free(iseq->aux.exec.local_hooks);
     }
 
-    RUBY_FREE_LEAVE("iseq");
+    RUBY_FREE_LEAVE("iseq", (void *)iseq);
 }
 
 typedef VALUE iseq_value_itr_t(void *ctx, VALUE obj);
@@ -341,7 +341,7 @@ cc_is_active(const struct rb_callcache *cc, bool reference_updating)
 void
 rb_iseq_mark_and_move(rb_iseq_t *iseq, bool reference_updating)
 {
-    RUBY_MARK_ENTER("iseq");
+    RUBY_MARK_ENTER("iseq", iseq);
 
     rb_gc_mark_and_move(&iseq->wrapper);
 
@@ -430,7 +430,7 @@ rb_iseq_mark_and_move(rb_iseq_t *iseq, bool reference_updating)
         }
     }
 
-    RUBY_MARK_LEAVE("iseq");
+    RUBY_MARK_LEAVE("iseq", iseq);
 }
 
 static size_t

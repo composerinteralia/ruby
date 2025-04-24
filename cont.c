@@ -1012,7 +1012,7 @@ cont_mark(void *ptr)
 {
     rb_context_t *cont = ptr;
 
-    RUBY_MARK_ENTER("cont");
+    RUBY_MARK_ENTER("cont", ptr);
     if (cont->self) {
         rb_gc_mark_movable(cont->self);
     }
@@ -1043,7 +1043,7 @@ cont_mark(void *ptr)
         }
     }
 
-    RUBY_MARK_LEAVE("cont");
+    RUBY_MARK_LEAVE("cont", ptr);
 }
 
 #if 0
@@ -1061,7 +1061,7 @@ cont_free(void *ptr)
 {
     rb_context_t *cont = ptr;
 
-    RUBY_FREE_ENTER("cont");
+    RUBY_FREE_ENTER("cont", ptr);
 
     if (cont->type == CONTINUATION_CONTEXT) {
         ruby_xfree(cont->saved_ec.vm_stack);
@@ -1079,7 +1079,7 @@ cont_free(void *ptr)
     jit_cont_free(cont->jit_cont);
     /* free rb_cont_t or rb_fiber_t */
     ruby_xfree(ptr);
-    RUBY_FREE_LEAVE("cont");
+    RUBY_FREE_LEAVE("cont", ptr);
 }
 
 static size_t
@@ -1143,19 +1143,19 @@ static void
 fiber_mark(void *ptr)
 {
     rb_fiber_t *fiber = ptr;
-    RUBY_MARK_ENTER("cont");
+    RUBY_MARK_ENTER("cont", ptr);
     fiber_verify(fiber);
     rb_gc_mark_movable(fiber->first_proc);
     if (fiber->prev) rb_fiber_mark_self(fiber->prev);
     cont_mark(&fiber->cont);
-    RUBY_MARK_LEAVE("cont");
+    RUBY_MARK_LEAVE("cont", ptr);
 }
 
 static void
 fiber_free(void *ptr)
 {
     rb_fiber_t *fiber = ptr;
-    RUBY_FREE_ENTER("fiber");
+    RUBY_FREE_ENTER("fiber", ptr);
 
     if (DEBUG) fprintf(stderr, "fiber_free: %p[%p]\n", (void *)fiber, fiber->stack.base);
 
@@ -1164,7 +1164,7 @@ fiber_free(void *ptr)
     }
 
     cont_free(&fiber->cont);
-    RUBY_FREE_LEAVE("fiber");
+    RUBY_FREE_LEAVE("fiber", ptr);
 }
 
 static size_t
@@ -3294,12 +3294,12 @@ static void
 fiber_pool_free(void *ptr)
 {
     struct fiber_pool * fiber_pool = ptr;
-    RUBY_FREE_ENTER("fiber_pool");
+    RUBY_FREE_ENTER("fiber_pool", ptr);
 
     fiber_pool_allocation_free(fiber_pool->allocations);
     ruby_xfree(fiber_pool);
 
-    RUBY_FREE_LEAVE("fiber_pool");
+    RUBY_FREE_LEAVE("fiber_pool", ptr);
 }
 
 static size_t

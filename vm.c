@@ -3008,7 +3008,7 @@ void rb_thread_sched_mark_zombies(rb_vm_t *vm);
 void
 rb_vm_mark(void *ptr)
 {
-    RUBY_MARK_ENTER("vm");
+    RUBY_MARK_ENTER("vm", ptr);
     RUBY_GC_INFO("-------------------------------------------------\n");
     if (ptr) {
         rb_vm_t *vm = ptr;
@@ -3064,7 +3064,7 @@ rb_vm_mark(void *ptr)
         rb_thread_sched_mark_zombies(vm);
     }
 
-    RUBY_MARK_LEAVE("vm");
+    RUBY_MARK_LEAVE("vm", ptr);
 }
 
 #undef rb_vm_register_special_exception
@@ -3091,7 +3091,7 @@ void rb_objspace_free_objects(void *objspace);
 int
 ruby_vm_destruct(rb_vm_t *vm)
 {
-    RUBY_FREE_ENTER("vm");
+    RUBY_FREE_ENTER("vm", vm);
 
     if (vm) {
         rb_thread_t *th = vm->ractor.main_thread;
@@ -3189,7 +3189,8 @@ ruby_vm_destruct(rb_vm_t *vm)
         }
 #endif
     }
-    RUBY_FREE_LEAVE("vm");
+
+    RUBY_FREE_LEAVE("vm", vm);
     return 0;
 }
 
@@ -3489,7 +3490,7 @@ static void
 thread_mark(void *ptr)
 {
     rb_thread_t *th = ptr;
-    RUBY_MARK_ENTER("thread");
+    RUBY_MARK_ENTER("thread", ptr);
     rb_fiber_mark_self(th->ec->fiber_ptr);
 
     /* mark ruby objects */
@@ -3524,7 +3525,7 @@ thread_mark(void *ptr)
 
     rb_threadptr_interrupt_exec_task_mark(th);
 
-    RUBY_MARK_LEAVE("thread");
+    RUBY_MARK_LEAVE("thread", ptr);
 }
 
 void rb_threadptr_sched_free(rb_thread_t *th); // thread_*.c
@@ -3533,7 +3534,7 @@ static void
 thread_free(void *ptr)
 {
     rb_thread_t *th = ptr;
-    RUBY_FREE_ENTER("thread");
+    RUBY_FREE_ENTER("thread", ptr);
 
     rb_threadptr_sched_free(th);
 
@@ -3557,7 +3558,7 @@ thread_free(void *ptr)
         ruby_xfree(th);
     }
 
-    RUBY_FREE_LEAVE("thread");
+    RUBY_FREE_LEAVE("thread", ptr);
 }
 
 static size_t
