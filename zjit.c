@@ -322,6 +322,7 @@ rb_iseq_set_zjit_payload(const rb_iseq_t *iseq, void *payload)
 
 // Primitives used by zjit.rb
 VALUE rb_zjit_assert_compiles(rb_execution_context_t *ec, VALUE self);
+VALUE rb_zjit_enable(rb_execution_context_t *ec, VALUE self, VALUE call_threshold, VALUE num_profiles);
 
 void
 rb_zjit_print_exception(void)

@@ -33,6 +33,9 @@ pub struct Options {
 
     /// Dump all compiled machine code.
     pub dump_disasm: bool,
+
+    /// Whether to disable ZJIT at boot.
+    pub disable: bool,
 }
 
 /// Return an Options with default values
@@ -44,6 +47,7 @@ pub fn init_options() -> Options {
         dump_hir_opt: None,
         dump_lir: false,
         dump_disasm: false,
+        disable: false,
     }
 }
 
@@ -52,6 +56,7 @@ pub fn init_options() -> Options {
 pub const ZJIT_OPTIONS: &'static [(&str, &str)] = &[
     ("--zjit-call-threshold=num", "Number of calls to trigger JIT (default: 2)."),
     ("--zjit-num-profiles=num",   "Number of profiled calls before JIT (default: 1)."),
+    ("--zjit-disable",            "Disable ZJIT for lazily enabling it with RubyVM::ZJIT.enable."),
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -143,6 +148,8 @@ fn parse_option(options: &mut Options, str_ptr: *const std::os::raw::c_char) -> 
 
         ("dump-disasm", "") => options.dump_disasm = true,
 
+        ("disable", "") => options.disable = true,
+
         _ => return None, // Option name not recognized
     }
 
@@ -163,7 +170,7 @@ fn update_profile_threshold(options: &Options) {
     }
 }
 
-/// Print YJIT options for `ruby --help`. `width` is width of option parts, and
+/// Print ZJIT options for `ruby --help`. `width` is width of option parts, and
 /// `columns` is indent width of descriptions.
 #[unsafe(no_mangle)]
 pub extern "C" fn rb_zjit_show_usage(help: c_int, highlight: c_int, width: c_uint, columns: c_int) {

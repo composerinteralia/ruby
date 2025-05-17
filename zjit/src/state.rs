@@ -1,7 +1,7 @@
-use crate::cruby::{self, rb_bug_panic_hook, EcPtr, Qnil, VALUE};
+use crate::cruby::{self, rb_bug_panic_hook, EcPtr, Qnil, Qtrue, VALUE};
 use crate::cruby_methods;
 use crate::invariants::Invariants;
-use crate::options::Options;
+use crate::options::{init_options, rb_zjit_call_threshold, Options};
 use crate::asm::CodeBlock;
 
 #[allow(non_upper_case_globals)]
@@ -131,25 +131,62 @@ impl ZJITState {
 /// Initialize ZJIT, given options allocated by rb_zjit_init_options()
 #[unsafe(no_mangle)]
 pub extern "C" fn rb_zjit_init(options: *const u8) {
+    let options = unsafe { Box::from_raw(options as *mut Options) };
+    zjit_init(*options);
+}
+
+fn zjit_init(options: Options) {
     // Catch panics to avoid UB for unwinding into C frames.
     // See https://doc.rust-lang.org/nomicon/exception-safety.html
     let result = std::panic::catch_unwind(|| {
         cruby::ids::init();
 
-        let options = unsafe { Box::from_raw(options as *mut Options) };
-        ZJITState::init(*options);
-        std::mem::drop(options);
+        ZJITState::init(options);
 
         rb_bug_panic_hook();
 
-        // ZJIT enabled and initialized successfully
-        assert!(unsafe{ !rb_zjit_enabled_p });
-        unsafe { rb_zjit_enabled_p = true; }
+        if !options.disable {
+            // ZJIT enabled and initialized successfully
+            assert!(unsafe{ !rb_zjit_enabled_p });
+            unsafe { rb_zjit_enabled_p = true; }
+        }
     });
 
     if result.is_err() {
         println!("ZJIT: zjit_init() panicked. Aborting.");
         std::process::abort();
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rb_zjit_enable(_ec: EcPtr, _self: VALUE, call_threshold: VALUE, num_profiles: VALUE) -> VALUE {
+    // Do I need this? And then move the other catch_unwind up
+    // with_vm_lock(src_loc!(), || {
+
+    if ZJITState::has_instance() {
+        let options = ZJITState::get_options();
+        update_options(options, call_threshold, num_profiles);
+
+        unsafe { rb_zjit_enabled_p = true; }
+    } else {
+        let mut options = init_options();
+        update_options(&mut options, call_threshold, num_profiles);
+
+        zjit_init(options);
+    }
+
+    Qtrue
+}
+
+fn update_options(options: &mut Options, call_threshold: VALUE, num_profiles: VALUE) {
+    if !call_threshold.nil_p() {
+        let threshold = call_threshold.as_isize() >> 1;
+        unsafe { rb_zjit_call_threshold = threshold as u64; }
+    }
+
+    if !num_profiles.nil_p() {
+        let profiles = num_profiles.as_isize() >> 1;
+        options.num_profiles = profiles as u64;
     }
 }
 
