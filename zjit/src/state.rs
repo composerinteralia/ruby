@@ -1,4 +1,4 @@
-use crate::cruby::{self, rb_bug_panic_hook, EcPtr, Qnil, Qtrue, VALUE};
+use crate::cruby::{self, rb_bug_panic_hook, src_loc, with_vm_lock, EcPtr, Qnil, Qtrue, VALUE};
 use crate::cruby_methods;
 use crate::invariants::Invariants;
 use crate::options::{init_options, rb_zjit_call_threshold, Options};
@@ -131,25 +131,11 @@ impl ZJITState {
 /// Initialize ZJIT, given options allocated by rb_zjit_init_options()
 #[unsafe(no_mangle)]
 pub extern "C" fn rb_zjit_init(options: *const u8) {
-    let options = unsafe { Box::from_raw(options as *mut Options) };
-    zjit_init(*options);
-}
-
-fn zjit_init(options: Options) {
     // Catch panics to avoid UB for unwinding into C frames.
     // See https://doc.rust-lang.org/nomicon/exception-safety.html
     let result = std::panic::catch_unwind(|| {
-        cruby::ids::init();
-
-        ZJITState::init(options);
-
-        rb_bug_panic_hook();
-
-        if !options.disable {
-            // ZJIT enabled and initialized successfully
-            assert!(unsafe{ !rb_zjit_enabled_p });
-            unsafe { rb_zjit_enabled_p = true; }
-        }
+        let options = unsafe { Box::from_raw(options as *mut Options) };
+        zjit_init(*options);
     });
 
     if result.is_err() {
@@ -158,22 +144,34 @@ fn zjit_init(options: Options) {
     }
 }
 
+fn zjit_init(options: Options) {
+    cruby::ids::init();
+
+    ZJITState::init(options);
+
+    rb_bug_panic_hook();
+
+    if !options.disable {
+        // ZJIT enabled and initialized successfully
+        assert!(unsafe{ !rb_zjit_enabled_p });
+        unsafe { rb_zjit_enabled_p = true; }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn rb_zjit_enable(_ec: EcPtr, _self: VALUE, call_threshold: VALUE, num_profiles: VALUE) -> VALUE {
-    // Do I need this? And then move the other catch_unwind up
-    // with_vm_lock(src_loc!(), || {
-
-    if ZJITState::has_instance() {
-        let options = ZJITState::get_options();
-        update_options(options, call_threshold, num_profiles);
-
-        unsafe { rb_zjit_enabled_p = true; }
-    } else {
-        let mut options = init_options();
-        update_options(&mut options, call_threshold, num_profiles);
-
-        zjit_init(options);
-    }
+    with_vm_lock(src_loc!(), || {
+        if ZJITState::has_instance() {
+            // Updating options here won't make sense when we have opts like exec mem size
+            // let options = ZJITState::get_options();
+            // update_options(options, call_threshold, num_profiles);
+            unsafe { rb_zjit_enabled_p = true; }
+        } else {
+            let mut options = init_options();
+            update_options(&mut options, call_threshold, num_profiles);
+            zjit_init(options);
+        }
+    });
 
     Qtrue
 }
