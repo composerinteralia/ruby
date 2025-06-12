@@ -306,6 +306,13 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_frozen?
+    assert_compiles 'false', %q{
+      def test = [].frozen?
+      test
+    }
+  end
+
   def test_array_dup
     assert_compiles '[1, 2, 3]', %q{
       def test = [1,2,3]

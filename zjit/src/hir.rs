@@ -9,7 +9,7 @@ use crate::{
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
-    ffi::{c_int, c_void},
+    ffi::{c_int, c_void, CStr},
     mem::{align_of, size_of},
     ptr,
     slice::Iter
@@ -436,6 +436,10 @@ pub enum Insn {
         state: InsnId,
     },
 
+    // Invoke a builtin function
+    InvokeBuiltin { bf: rb_builtin_function, state: InsnId },
+    InvokeBuiltinDelegate { bf: rb_builtin_function, index: i32, state: InsnId },
+
     /// Control flow instructions
     Return { val: InsnId },
 
@@ -595,6 +599,8 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
                 }
                 Ok(())
             }
+            Insn::InvokeBuiltin { bf, .. } => { write!(f, "InvokeBuiltinDelegate {}", unsafe { CStr::from_ptr(bf.name) }.to_str().unwrap()) }
+            Insn::InvokeBuiltinDelegate { bf, .. } => { write!(f, "InvokeBuiltinDelegate {}", unsafe { CStr::from_ptr(bf.name) }.to_str().unwrap()) }
             Insn::Return { val } => { write!(f, "Return {val}") }
             Insn::FixnumAdd  { left, right, .. } => { write!(f, "FixnumAdd {left}, {right}") },
             Insn::FixnumSub  { left, right, .. } => { write!(f, "FixnumSub {left}, {right}") },
@@ -982,6 +988,8 @@ impl Function {
                 args: args.iter().map(|arg| find!(*arg)).collect(),
                 state: *state,
             },
+            InvokeBuiltin { bf, state } => InvokeBuiltin { bf: *bf, state: *state },
+            InvokeBuiltinDelegate { bf, index, state } => InvokeBuiltinDelegate { bf: *bf, index: *index, state: *state },
             ArraySet { array, idx, val } => ArraySet { array: find!(*array), idx: *idx, val: find!(*val) },
             ArrayDup { val , state } => ArrayDup { val: find!(*val), state: *state },
             &HashDup { val , state } => HashDup { val: find!(val), state },
@@ -1077,6 +1085,8 @@ impl Function {
             Insn::SendWithoutBlock { .. } => types::BasicObject,
             Insn::SendWithoutBlockDirect { .. } => types::BasicObject,
             Insn::Send { .. } => types::BasicObject,
+            Insn::InvokeBuiltin { .. } => types::BasicObject,
+            Insn::InvokeBuiltinDelegate { .. } => types::BasicObject,
             Insn::Defined { .. } => types::BasicObject,
             Insn::DefinedIvar { .. } => types::BasicObject,
             Insn::GetConstantPath { .. } => types::BasicObject,
@@ -1640,6 +1650,8 @@ impl Function {
                     worklist.extend(args);
                     worklist.push_back(state);
                 }
+                Insn::InvokeBuiltin { state, .. } | Insn::InvokeBuiltinDelegate { state, .. } =>
+                    worklist.push_back(state),
                 Insn::CCall { args, .. } => worklist.extend(args),
                 Insn::GetIvar { self_val, state, .. } | Insn::DefinedIvar { self_val, state, .. } => {
                     worklist.push_back(self_val);
@@ -2488,6 +2500,22 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let low = state.stack_pop()?;
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
                     let insn_id = fun.push_insn(block, Insn::NewRange { low, high, flag, state: exit_id });
+                    state.stack_push(insn_id);
+                }
+                YARVINSN_invokebuiltin => {
+                    let bf: rb_builtin_function = unsafe { *get_arg(pc, 0).as_ptr() };
+
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let insn_id = fun.push_insn(block, Insn::InvokeBuiltin { bf, state: exit_id });
+                    state.stack_push(insn_id);
+                }
+                YARVINSN_opt_invokebuiltin_delegate |
+                YARVINSN_opt_invokebuiltin_delegate_leave => {
+                    let bf: rb_builtin_function = unsafe { *get_arg(pc, 0).as_ptr() };
+                    let index = get_arg(pc, 1).as_i32();
+
+                    let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
+                    let insn_id = fun.push_insn(block, Insn::InvokeBuiltinDelegate { bf, index, state: exit_id });
                     state.stack_push(insn_id);
                 }
                 _ => {

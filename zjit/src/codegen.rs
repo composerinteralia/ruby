@@ -278,6 +278,8 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SetGlobal { id, val, state: _ } => gen_setglobal(asm, *id, opnd!(val)),
         Insn::GetGlobal { id, state: _ } => gen_getglobal(asm, *id),
         Insn::SetIvar { self_val, id, val, state: _ } => gen_setivar(asm, opnd!(self_val), *id, opnd!(val)),
+        Insn::InvokeBuiltin { bf, state } => gen_invokebuiltin(jit, asm, &function.frame_state(*state), bf)?,
+        Insn::InvokeBuiltinDelegate { bf, index, state } => gen_invokebuiltin_delegate(jit, asm, &function.frame_state(*state), bf, index)?,
         _ => {
             debug!("ZJIT: gen_function: unexpected insn {:?}", insn);
             return None;
@@ -288,6 +290,55 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
     jit.opnds[insn_id.0] = Some(out_opnd);
 
     Some(())
+}
+
+fn gen_invokebuiltin(_jit: &mut JITState, asm: &mut Assembler, state: &FrameState, bf: &rb_builtin_function) -> Option<lir::Opnd> {
+    // ec, self, and arguments
+    if bf.argc + 2 > (C_ARG_OPNDS.len() as i32) {
+        return None;
+    }
+
+    gen_save_pc(asm, state);
+
+    let mut args = vec![EC, Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF)];
+
+    println!("invokebuiltin with {} args", bf.argc);
+    // Copy arguments from stack
+    for i in 0..bf.argc {
+        // TODO: This is not right
+        let opnd = Opnd::mem(64, SP, (i - bf.argc) * SIZEOF_VALUE_I32);
+        args.push(opnd);
+    }
+
+    let val = asm.ccall(bf.func_ptr as *const u8, args);
+
+    Some(val)
+}
+
+fn gen_invokebuiltin_delegate(jit: &mut JITState, asm: &mut Assembler, state: &FrameState, bf: &rb_builtin_function, index: &i32) -> Option<lir::Opnd> {
+    // ec, self, and arguments
+    if bf.argc + 2 > (C_ARG_OPNDS.len() as i32) {
+        return None;
+    }
+
+    gen_save_pc(asm, state);
+
+    let mut args = vec![EC, Opnd::mem(64, CFP, RUBY_OFFSET_CFP_SELF)];
+
+    println!("invokebuiltin_delegate with {} args", bf.argc);
+    // Copy arguments from locals
+    if bf.argc > 0 {
+        for i in 0..bf.argc {
+            // TODO: This generates similar code to YJIT, but it doesn't seem to work...
+            let ep = asm.load(Opnd::mem(64, CFP, RUBY_OFFSET_CFP_EP));
+            let ep_offset = local_idx_to_ep_offset(jit.iseq, (index + i) as usize);
+            let offs = -(SIZEOF_VALUE_I32 * ep_offset);
+            args.push(Opnd::mem(64, ep, offs))
+        }
+    }
+    let val = asm.ccall(bf.func_ptr as *const u8, args);
+
+    Some(val)
 }
 
 /// Lowering for [`Insn::CCall`]. This is a low-level raw call that doesn't know
