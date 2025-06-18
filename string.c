@@ -2174,6 +2174,7 @@ rb_obj_as_string(VALUE obj)
 VALUE
 rb_obj_as_string_result(VALUE str, VALUE obj)
 {
+    fprintf(stderr, "stuff: %p (is str: %d) %p", str, RB_TYPE_P(str, T_STRING), obj);
     if (!RB_TYPE_P(str, T_STRING))
         return rb_any_to_s(obj);
     return str;
@@ -4106,6 +4107,15 @@ rb_str_append(VALUE str, VALUE str2)
     StringValue(str2);
     return rb_str_buf_append(str, str2);
 }
+
+/* static VALUE */
+/* rb_zjit_str_concat_literals(size_t num, ...) */
+/* { */
+/*     va_list args; */
+/*     va_start(args, num); */
+/*     err = rb_str_concat_literals(num, args); */
+/*     va_end(args); */
+/* } */
 
 VALUE
 rb_str_concat_literals(size_t num, const VALUE *strary)

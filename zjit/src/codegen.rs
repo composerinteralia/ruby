@@ -283,7 +283,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SideExit { state } => return gen_side_exit(jit, asm, &function.frame_state(*state)),
         Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
         Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state))?,
-        Insn::ConcatStrings { num, state } => gen_concatstrings(asm, *num, &function.frame_state(*state))?,
+        Insn::ConcatStrings { num, strs, state } => gen_concatstrings(jit, asm, *num, strs, &function.frame_state(*state))?,
         _ => {
             debug!("ZJIT: gen_function: unexpected insn {:?}", insn);
             return None;
@@ -811,31 +811,55 @@ fn gen_anytostring(asm: &mut Assembler, val: lir::Opnd, str: lir::Opnd, state: &
 }
  
 fn gen_concatstrings(
+    jit: &mut JITState,
     asm: &mut Assembler, 
     num: usize,
+    strs: &Vec<InsnId>,
     state: &FrameState
-) -> Option<(lir::Opnd)> {
+) -> Option<lir::Opnd> {
     asm_comment!(asm, "call rb_str_concat_literals");
 
-    let disp = num as i32 * SIZEOF_VALUE_I32 as i32;
-    // asm_comment!(asm, "find lea");
-    let sp_addr = asm.lea(Opnd::mem(64, SP, disp));
-    // asm_comment!(asm, "find lea end");
+    #[unsafe(no_mangle)]
+    pub extern "C" fn print_value_fn(val: VALUE) {
+        unsafe { rb_obj_info_dump(val) }
+    }
 
-    let operands = vec![Opnd::UImm(num as u64), sp_addr];
+    for i in -10..0 {
+        let disp = i * SIZEOF_VALUE_I32;
+        let sp = asm.lea(Opnd::mem(64, SP, disp));
+        let op = asm.load(Opnd::mem(64, sp, 0));
+
+        asm.ccall(print_value_fn as *const u8, vec![op]);
+    }
+
+    for (idx, &insn_id) in strs.iter().enumerate() {
+        asm_comment!(asm, "spilling args to stack {idx}");
+        println!("{:?} - {:?}", insn_id, jit.get_opnd(insn_id));
+        asm.mov(Opnd::mem(64, SP, (idx + 1) as i32 * SIZEOF_VALUE_I32), jit.get_opnd(insn_id)?);
+        asm_comment!(asm, "don spilling args to stack {idx}");
+    }
+
+    for i in -10..5 {
+        let disp = i as i32 * SIZEOF_VALUE_I32 as i32;
+        let sp = asm.lea(Opnd::mem(64, SP, disp));
+        let op = asm.load(Opnd::mem(64, sp, 0));
+
+        asm.ccall(print_value_fn as *const u8, vec![op]);
+    }
+
 
     // Save PC
     gen_save_pc(asm, state);
 
     let result = asm.ccall(
         rb_str_concat_literals as *const u8,
-        operands,
+        vec![Opnd::Imm(0), Opnd::Imm(0)],
     );
 
     // println!("  gen_concatstrings: result = {:?}", result);
 
+    // Some(result)
     Some(result)
-    // Some(())
 }
 
 /// Evaluate if a value is truthy

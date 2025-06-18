@@ -495,7 +495,7 @@ pub enum Insn {
 
     ObjToString { val: InsnId, call_info: CallInfo, cd: *const rb_call_data, state: InsnId },
     AnyToString { val: InsnId, str: InsnId, state: InsnId },
-    ConcatStrings { num: usize, state: InsnId },
+    ConcatStrings { num: usize, strs: Vec<InsnId>, state: InsnId },
 
     /// Side-exit if val doesn't have the expected type.
     GuardType { val: InsnId, guard_type: Type, state: InsnId },
@@ -691,7 +691,13 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::ArrayPush { array, val, .. } => write!(f, "ArrayPush {array}, {val}"),
             Insn::ObjToString { val, .. } => { write!(f, "ObjToString {val}") },
             Insn::AnyToString { val, str, .. } => { write!(f, "AnyToString {val}, str: {str}") },
-            Insn::ConcatStrings { num, .. } => { write!(f, "ConcatStrings with {num} values") },
+            Insn::ConcatStrings { num, strs, .. } => {
+                write!(f, "ConcatStrings")?;
+                for arg in strs {
+                    write!(f, ", {arg}")?;
+                };
+                Ok(())
+            },
             Insn::SideExit { .. } => write!(f, "SideExit"),
             Insn::PutSpecialObject { value_type } => {
                 write!(f, "PutSpecialObject {}", value_type)
@@ -1021,8 +1027,9 @@ impl Function {
                 str: find!(*str),
                 state: *state,
             },
-            ConcatStrings { num, state } => ConcatStrings {
+            ConcatStrings { num, strs, state } => ConcatStrings {
                 num: *num,
+                strs: find_vec!(*strs),
                 state: *state,
             },
             SendWithoutBlock { self_val, call_info, cd, args, state } => SendWithoutBlock {
@@ -1791,8 +1798,9 @@ impl Function {
                     worklist.push_back(str);
                     worklist.push_back(state);
                 }
-                Insn::ConcatStrings { state, .. } => {
+                Insn::ConcatStrings { strs, state, .. } => {
                     worklist.push_back(state);
+                    worklist.extend(strs);
                 }
                 Insn::GetGlobal { state, .. } |
                 Insn::SideExit { state } => worklist.push_back(state),
@@ -2698,13 +2706,12 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                     let num = get_arg(pc, 0).as_usize();
                     assert!(num > 1, "concatstrings expects more than 1 string on the stack");
 
-                    // let mut elements = vec![];
-                    // for _ in 0..num {
-                    //     let str = state.stack_pop()?;
-                    //     elements.push(str);
-                    // }
-
-                    // elements.reverse();
+                    let mut strs = vec![];
+                    for _ in 0..num {
+                        let str = state.stack_pop()?;
+                        strs.push(str);
+                    }
+                    strs.reverse();
 
                 //     let mut result = String::new();
                 //     for insn_id in &elements {
@@ -2716,7 +2723,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
                 //     }
 
                     let exit_id = fun.push_insn(block, Insn::Snapshot { state: exit_state });
-                    let insn_id = fun.push_insn(block, Insn::ConcatStrings { num, state: exit_id });
+                    let insn_id = fun.push_insn(block, Insn::ConcatStrings { num, strs, state: exit_id });
                     state.stack_push(insn_id);
                 }
                 _ => {
