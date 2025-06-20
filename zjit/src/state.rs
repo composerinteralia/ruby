@@ -1,9 +1,9 @@
-use crate::cruby::{self, rb_bug_panic_hook, EcPtr, Qnil, VALUE};
+use crate::cruby::{self, rb_bug_panic_hook, EcPtr, Qnil, Qundef, VALUE};
 use crate::cruby_methods;
 use crate::invariants::Invariants;
 use crate::options::Options;
 use crate::asm::CodeBlock;
-use crate::backend::lir::{Assembler, C_RET_OPND};
+use crate::backend::lir::{Assembler, C_RET_OPND, Opnd};
 use crate::virtualmem::CodePtr;
 
 #[allow(non_upper_case_globals)]
@@ -34,6 +34,9 @@ pub struct ZJITState {
 
     /// Trampoline to propagate a callee's side exit to the caller
     exit_trampoline: Option<CodePtr>,
+
+    /// Exit without side exit bookkeeping
+    entry_exit: Option<CodePtr>,
 }
 
 /// Private singleton instance of the codegen globals
@@ -89,6 +92,7 @@ impl ZJITState {
             assert_compiles: false,
             method_annotations: cruby_methods::init(),
             exit_trampoline: None,
+            entry_exit: None,
         };
         unsafe { ZJIT_STATE = Some(zjit_state); }
 
@@ -96,6 +100,8 @@ impl ZJITState {
         let cb = ZJITState::get_code_block();
         let exit_trampoline = Self::gen_exit_trampoline(cb).unwrap();
         ZJITState::get_instance().exit_trampoline = Some(exit_trampoline);
+        let entry_exit = Self::gen_entry_exit(cb).unwrap();
+        ZJITState::get_instance().entry_exit = Some(entry_exit);
     }
 
     /// Return true if zjit_state has been initialized
@@ -149,6 +155,19 @@ impl ZJITState {
     /// Get the trampoline to propagate a callee's side exit to the caller
     pub fn get_exit_trampoline() -> CodePtr {
         ZJITState::get_instance().exit_trampoline.unwrap()
+    }
+
+    // Generate code to side exit to the interpreter without the usual sideexit bookkeeping
+    fn gen_entry_exit(cb: &mut CodeBlock) -> Option<CodePtr> {
+        let mut asm = Assembler::new();
+        asm.mov(C_RET_OPND, Opnd::UImm(Qundef.as_u64()));
+        asm.cret(C_RET_OPND);
+        asm.compile(cb).map(|(start_ptr, _)| start_ptr)
+    }
+
+    /// Get the entry exit to side exit without bookkeeping
+    pub fn get_entry_exit() -> CodePtr {
+        ZJITState::get_instance().entry_exit.unwrap()
     }
 }
 

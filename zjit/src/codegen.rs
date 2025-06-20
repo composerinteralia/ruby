@@ -415,17 +415,9 @@ fn gen_entry_prologue(asm: &mut Assembler, fun: &Function) {
          let expected_pc = unsafe { rb_iseq_pc_at_idx(fun.iseq, fun.start_idx) };
          let expected_pc_opnd = Opnd::const_ptr(expected_pc as *const u8);
          let pc_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC);
-
-         let cb = ZJITState::get_code_block();
-         let mut exit_asm = Assembler::new();
-         asm_comment!(exit_asm, "entry exit");
-         exit_asm.mov(C_RET_OPND, Opnd::UImm(Qundef.as_u64()));
-         exit_asm.cret(C_RET_OPND);
-         let exit_ptr = exit_asm.compile(cb).map(|(start_ptr, _)| start_ptr).unwrap();
-
          asm.cmp(pc_opnd, expected_pc_opnd);
-         // TODO compile with the new PC and jump to that instead of exiting
-         asm.jne(exit_ptr.into());
+         // TODO compile function for the other PC and jump to that instead of exiting
+         asm.jne(ZJITState::get_entry_exit().into());
     }
 
     asm.frame_setup();
