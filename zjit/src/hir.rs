@@ -847,7 +847,10 @@ impl<T: Copy + Into<usize> + PartialEq> UnionFind<T> {
 #[derive(Debug)]
 pub struct Function {
     // ISEQ this function refers to
-    iseq: *const rb_iseq_t,
+    pub iseq: *const rb_iseq_t,
+    /// Index in the iseq where the function starts
+    pub start_idx: u32,
+
     // The types for the parameters of this function
     param_types: Vec<Type>,
 
@@ -862,9 +865,10 @@ pub struct Function {
 }
 
 impl Function {
-    fn new(iseq: *const rb_iseq_t) -> Function {
+    fn new(iseq: *const rb_iseq_t, start_idx: u32) -> Function {
         Function {
             iseq,
+            start_idx,
             insns: vec![],
             insn_types: vec![],
             union_find: UnionFind::new().into(),
@@ -1993,16 +1997,16 @@ fn insn_idx_at_offset(idx: u32, offset: i64) -> u32 {
     ((idx as isize) + (offset as isize)) as u32
 }
 
-fn compute_jump_targets(iseq: *const rb_iseq_t) -> Vec<u32> {
-    let iseq_size = unsafe { get_iseq_encoded_size(iseq) };
-    let mut insn_idx = 0;
+fn compute_jump_targets(fun: &Function) -> Vec<u32> {
+    let iseq_size = unsafe { get_iseq_encoded_size(fun.iseq) };
+    let mut insn_idx = fun.start_idx;
     let mut jump_targets = HashSet::new();
     while insn_idx < iseq_size {
         // Get the current pc and opcode
-        let pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx) };
+        let pc = unsafe { rb_iseq_pc_at_idx(fun.iseq, insn_idx) };
 
         // try_into() call below is unfortunate. Maybe pick i32 instead of usize for opcodes.
-        let opcode: u32 = unsafe { rb_iseq_opcode_at_pc(iseq, pc) }
+        let opcode: u32 = unsafe { rb_iseq_opcode_at_pc(fun.iseq, pc) }
             .try_into()
             .unwrap();
         insn_idx += insn_len(opcode as usize);
@@ -2105,15 +2109,15 @@ impl ProfileOracle {
 pub const SELF_PARAM_IDX: usize = 0;
 
 /// Compile ISEQ into High-level IR
-pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
+pub fn iseq_to_hir(iseq: *const rb_iseq_t, start_idx: u32) -> Result<Function, ParseError> {
     let payload = get_or_create_iseq_payload(iseq);
     let mut profiles = ProfileOracle::new(payload);
-    let mut fun = Function::new(iseq);
+    let mut fun = Function::new(iseq, start_idx);
     // Compute a map of PC->Block by finding jump targets
-    let jump_targets = compute_jump_targets(iseq);
+    let jump_targets = compute_jump_targets(&fun);
     let mut insn_idx_to_block = HashMap::new();
     for insn_idx in jump_targets {
-        if insn_idx == 0 {
+        if insn_idx == fun.start_idx {
             todo!("Separate entry block for param/self/...");
         }
         insn_idx_to_block.insert(insn_idx, fun.new_block());
@@ -2151,7 +2155,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
         }
         fun.param_types.push(param_type);
     }
-    queue.push_back((entry_state, fun.entry_block, /*insn_idx=*/0_u32));
+    queue.push_back((entry_state, fun.entry_block, fun.start_idx));
 
     let mut visited = HashSet::new();
 
@@ -2159,7 +2163,7 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
     while let Some((incoming_state, block, mut insn_idx)) = queue.pop_front() {
         if visited.contains(&block) { continue; }
         visited.insert(block);
-        let (self_param, mut state) = if insn_idx == 0 {
+        let (self_param, mut state) = if insn_idx == fun.start_idx {
             (fun.blocks[fun.entry_block.0].params[SELF_PARAM_IDX], incoming_state.clone())
         } else {
             let self_param = fun.push_insn(block, Insn::Param { idx: SELF_PARAM_IDX });
@@ -2732,7 +2736,7 @@ mod rpo_tests {
 
     #[test]
     fn one_block() {
-        let mut function = Function::new(std::ptr::null());
+        let mut function = Function::new(std::ptr::null(), 0);
         let entry = function.entry_block;
         let val = function.push_insn(entry, Insn::Const { val: Const::Value(Qnil) });
         function.push_insn(entry, Insn::Return { val });
@@ -2741,7 +2745,7 @@ mod rpo_tests {
 
     #[test]
     fn jump() {
-        let mut function = Function::new(std::ptr::null());
+        let mut function = Function::new(std::ptr::null(), 0);
         let entry = function.entry_block;
         let exit = function.new_block();
         function.push_insn(entry, Insn::Jump(BranchEdge { target: exit, args: vec![] }));
@@ -2752,7 +2756,7 @@ mod rpo_tests {
 
     #[test]
     fn diamond_iftrue() {
-        let mut function = Function::new(std::ptr::null());
+        let mut function = Function::new(std::ptr::null(), 0);
         let entry = function.entry_block;
         let side = function.new_block();
         let exit = function.new_block();
@@ -2767,7 +2771,7 @@ mod rpo_tests {
 
     #[test]
     fn diamond_iffalse() {
-        let mut function = Function::new(std::ptr::null());
+        let mut function = Function::new(std::ptr::null(), 0);
         let entry = function.entry_block;
         let side = function.new_block();
         let exit = function.new_block();
@@ -2782,7 +2786,7 @@ mod rpo_tests {
 
     #[test]
     fn a_loop() {
-        let mut function = Function::new(std::ptr::null());
+        let mut function = Function::new(std::ptr::null(), 0);
         let entry = function.entry_block;
         function.push_insn(entry, Insn::Jump(BranchEdge { target: entry, args: vec![] }));
         assert_eq!(function.rpo(), vec![entry]);
@@ -2805,7 +2809,7 @@ mod infer_tests {
 
     #[test]
     fn test_const() {
-        let mut function = Function::new(std::ptr::null());
+        let mut function = Function::new(std::ptr::null(), 0);
         let val = function.push_insn(function.entry_block, Insn::Const { val: Const::Value(Qnil) });
         assert_bit_equal(function.infer_type(val), types::NilClassExact);
     }
@@ -2813,7 +2817,7 @@ mod infer_tests {
     #[test]
     fn test_nil() {
         crate::cruby::with_rubyvm(|| {
-            let mut function = Function::new(std::ptr::null());
+            let mut function = Function::new(std::ptr::null(), 0);
             let nil = function.push_insn(function.entry_block, Insn::Const { val: Const::Value(Qnil) });
             let val = function.push_insn(function.entry_block, Insn::Test { val: nil });
             function.infer_types();
@@ -2824,7 +2828,7 @@ mod infer_tests {
     #[test]
     fn test_false() {
         crate::cruby::with_rubyvm(|| {
-            let mut function = Function::new(std::ptr::null());
+            let mut function = Function::new(std::ptr::null(), 0);
             let false_ = function.push_insn(function.entry_block, Insn::Const { val: Const::Value(Qfalse) });
             let val = function.push_insn(function.entry_block, Insn::Test { val: false_ });
             function.infer_types();
@@ -2835,7 +2839,7 @@ mod infer_tests {
     #[test]
     fn test_truthy() {
         crate::cruby::with_rubyvm(|| {
-            let mut function = Function::new(std::ptr::null());
+            let mut function = Function::new(std::ptr::null(), 0);
             let true_ = function.push_insn(function.entry_block, Insn::Const { val: Const::Value(Qtrue) });
             let val = function.push_insn(function.entry_block, Insn::Test { val: true_ });
             function.infer_types();
@@ -2846,7 +2850,7 @@ mod infer_tests {
     #[test]
     fn test_unknown() {
         crate::cruby::with_rubyvm(|| {
-            let mut function = Function::new(std::ptr::null());
+            let mut function = Function::new(std::ptr::null(), 0);
             let param = function.push_insn(function.entry_block, Insn::Param { idx: SELF_PARAM_IDX });
             function.param_types.push(types::BasicObject); // self
             let val = function.push_insn(function.entry_block, Insn::Test { val: param });
@@ -2857,7 +2861,7 @@ mod infer_tests {
 
     #[test]
     fn newarray() {
-        let mut function = Function::new(std::ptr::null());
+        let mut function = Function::new(std::ptr::null(), 0);
         // Fake FrameState index of 0usize
         let val = function.push_insn(function.entry_block, Insn::NewArray { elements: vec![], state: InsnId(0usize) });
         assert_bit_equal(function.infer_type(val), types::ArrayExact);
@@ -2865,7 +2869,7 @@ mod infer_tests {
 
     #[test]
     fn arraydup() {
-        let mut function = Function::new(std::ptr::null());
+        let mut function = Function::new(std::ptr::null(), 0);
         // Fake FrameState index of 0usize
         let arr = function.push_insn(function.entry_block, Insn::NewArray { elements: vec![], state: InsnId(0usize) });
         let val = function.push_insn(function.entry_block, Insn::ArrayDup { val: arr, state: InsnId(0usize) });
@@ -2874,7 +2878,7 @@ mod infer_tests {
 
     #[test]
     fn diamond_iffalse_merge_fixnum() {
-        let mut function = Function::new(std::ptr::null());
+        let mut function = Function::new(std::ptr::null(), 0);
         let entry = function.entry_block;
         let side = function.new_block();
         let exit = function.new_block();
@@ -2893,7 +2897,7 @@ mod infer_tests {
 
     #[test]
     fn diamond_iffalse_merge_bool() {
-        let mut function = Function::new(std::ptr::null());
+        let mut function = Function::new(std::ptr::null(), 0);
         let entry = function.entry_block;
         let side = function.new_block();
         let exit = function.new_block();
@@ -2954,7 +2958,7 @@ mod tests {
     fn assert_method_hir(method: &str, hir: Expect) {
         let iseq = crate::cruby::with_rubyvm(|| get_method_iseq("self", method));
         unsafe { crate::cruby::rb_zjit_profile_disable(iseq) };
-        let function = iseq_to_hir(iseq).unwrap();
+        let function = iseq_to_hir(iseq, 0).unwrap();
         assert_function_hir(function, hir);
     }
 
@@ -2984,7 +2988,7 @@ mod tests {
             assert!(iseq_contains_opcode(iseq, opcode), "iseq {method} does not contain {}", insn_name(opcode as usize));
         }
         unsafe { crate::cruby::rb_zjit_profile_disable(iseq) };
-        let function = iseq_to_hir(iseq).unwrap();
+        let function = iseq_to_hir(iseq, 0).unwrap();
         assert_function_hir(function, hir);
     }
 
@@ -3003,7 +3007,7 @@ mod tests {
     fn assert_compile_fails(method: &str, reason: ParseError) {
         let iseq = crate::cruby::with_rubyvm(|| get_method_iseq("self", method));
         unsafe { crate::cruby::rb_zjit_profile_disable(iseq) };
-        let result = iseq_to_hir(iseq);
+        let result = iseq_to_hir(iseq, 0);
         assert!(result.is_err(), "Expected an error but succesfully compiled to HIR: {}", FunctionPrinter::without_snapshot(&result.unwrap()));
         assert_eq!(result.unwrap_err(), reason);
     }
@@ -4254,7 +4258,7 @@ mod tests {
     fn test_invokebuiltin_with_args() {
         let iseq = crate::cruby::with_rubyvm(|| get_method_iseq("GC", "start"));
         assert!(iseq_contains_opcode(iseq, YARVINSN_invokebuiltin), "iseq GC.start does not contain invokebuiltin");
-        let function = iseq_to_hir(iseq).unwrap();
+        let function = iseq_to_hir(iseq, 0).unwrap();
         assert_function_hir(function, expect![[r#"
             fn start:
             bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject, v3:BasicObject, v4:BasicObject):
@@ -4275,7 +4279,7 @@ mod opt_tests {
     fn assert_optimized_method_hir(method: &str, hir: Expect) {
         let iseq = crate::cruby::with_rubyvm(|| get_method_iseq("self", method));
         unsafe { crate::cruby::rb_zjit_profile_disable(iseq) };
-        let mut function = iseq_to_hir(iseq).unwrap();
+        let mut function = iseq_to_hir(iseq, 0).unwrap();
         function.optimize();
         assert_function_hir(function, hir);
     }

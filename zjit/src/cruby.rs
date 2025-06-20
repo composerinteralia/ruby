@@ -262,7 +262,7 @@ pub struct ID(pub ::std::os::raw::c_ulong);
 pub type IseqPtr = *const rb_iseq_t;
 
 // Given an ISEQ pointer, convert PC to insn_idx
-pub fn iseq_pc_to_insn_idx(iseq: IseqPtr, pc: *mut VALUE) -> Option<u16> {
+pub fn iseq_pc_to_insn_idx(iseq: IseqPtr, pc: *mut VALUE) -> Option<u32> {
     let pc_zero = unsafe { rb_iseq_pc_at_idx(iseq, 0) };
     unsafe { pc.offset_from(pc_zero) }.try_into().ok()
 }
@@ -708,7 +708,7 @@ pub fn iseq_name(iseq: IseqPtr) -> String {
 // Location is the file defining the method, colon, method name.
 // Filenames are sometimes internal strings supplied to eval,
 // so be careful with them.
-pub fn iseq_get_location(iseq: IseqPtr, pos: u16) -> String {
+pub fn iseq_get_location(iseq: IseqPtr, pos: u32) -> String {
     let iseq_path = unsafe { rb_iseq_path(iseq) };
     let iseq_lineno = unsafe { rb_iseq_line_no(iseq, pos as usize) };
 

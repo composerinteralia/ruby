@@ -7,7 +7,7 @@ use crate::state::ZJITState;
 use crate::{asm::CodeBlock, cruby::*, options::debug, virtualmem::CodePtr};
 use crate::invariants::{iseq_escapes_ep, track_no_ep_escape_assumption};
 use crate::backend::lir::{self, asm_comment, Assembler, Opnd, Target, CFP, C_ARG_OPNDS, C_RET_OPND, EC, SP};
-use crate::hir::{iseq_to_hir, Block, BlockId, BranchEdge, CallInfo, RangeType, SELF_PARAM_IDX, SpecialObjectType};
+use crate::hir::{iseq_to_hir, BlockId, BranchEdge, CallInfo, RangeType, SELF_PARAM_IDX, SpecialObjectType};
 use crate::hir::{Const, FrameState, Function, Insn, InsnId};
 use crate::hir_type::{types::Fixnum, Type};
 use crate::options::get_option;
@@ -71,7 +71,7 @@ impl JITState {
 
 /// CRuby API to compile a given ISEQ
 #[unsafe(no_mangle)]
-pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, _ec: EcPtr) -> *const u8 {
+pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, ec: EcPtr) -> *const u8 {
     // Do not test the JIT code in HIR tests
     if cfg!(test) {
         return std::ptr::null();
@@ -80,7 +80,7 @@ pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, _ec: EcPtr) -> *co
     // Take a lock to avoid writing to ISEQ in parallel with Ractors.
     // with_vm_lock() does nothing if the program doesn't use Ractors.
     let code_ptr = with_vm_lock(src_loc!(), || {
-        gen_iseq_entry_point(iseq)
+        gen_iseq_entry_point(iseq, ec)
     });
 
     // Assert that the ISEQ compiles if RubyVM::ZJIT.assert_compiles is enabled
@@ -93,9 +93,13 @@ pub extern "C" fn rb_zjit_iseq_gen_entry_point(iseq: IseqPtr, _ec: EcPtr) -> *co
 }
 
 /// Compile an entry point for a given ISEQ
-fn gen_iseq_entry_point(iseq: IseqPtr) -> *const u8 {
+fn gen_iseq_entry_point(iseq: IseqPtr, ec: EcPtr) -> *const u8 {
+    let cfp = unsafe { get_ec_cfp(ec) };
+    let pc: *mut VALUE = unsafe { get_cfp_pc(cfp) };
+    let Some(start_idx) = iseq_pc_to_insn_idx(iseq, pc) else { return std::ptr::null() };
+
     // Compile ISEQ into High-level IR
-    let function = match compile_iseq(iseq) {
+    let function = match compile_iseq(iseq, start_idx) {
         Some(function) => function,
         None => return std::ptr::null(),
     };
@@ -109,7 +113,7 @@ fn gen_iseq_entry_point(iseq: IseqPtr) -> *const u8 {
             payload.start_ptr = Some(start_ptr);
 
             // Compile an entry point to the JIT code
-            (gen_entry(cb, iseq, &function, start_ptr), branch_iseqs)
+            (gen_entry(cb, &function, start_ptr), branch_iseqs)
         },
         None => (None, vec![]),
     };
@@ -140,11 +144,11 @@ fn gen_iseq_entry_point(iseq: IseqPtr) -> *const u8 {
 }
 
 /// Compile a JIT entry
-fn gen_entry(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function, function_ptr: CodePtr) -> Option<CodePtr> {
+fn gen_entry(cb: &mut CodeBlock, function: &Function, function_ptr: CodePtr) -> Option<CodePtr> {
     // Set up registers for CFP, EC, SP, and basic block arguments
     let mut asm = Assembler::new();
-    gen_entry_prologue(&mut asm, iseq);
-    gen_method_params(&mut asm, iseq, function.block(BlockId(0)));
+    gen_entry_prologue(&mut asm, function);
+    gen_method_params(&mut asm, function);
 
     // Jump to the first block using a call instruction
     asm.ccall(function_ptr.raw_ptr(cb) as *const u8, vec![]);
@@ -173,7 +177,9 @@ fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<(CodePtr, Vec<(Rc<Branc
     }
 
     // Convert ISEQ into High-level IR and optimize HIR
-    let function = match compile_iseq(iseq) {
+    // TODO don't assume start_idx 0
+    let start_idx = 0;
+    let function = match compile_iseq(iseq, start_idx) {
         Some(function) => function,
         None => return None,
     };
@@ -401,8 +407,27 @@ fn gen_putspecialobject(asm: &mut Assembler, value_type: SpecialObjectType) -> O
 }
 
 /// Compile an interpreter entry block to be inserted into an ISEQ
-fn gen_entry_prologue(asm: &mut Assembler, iseq: IseqPtr) {
-    asm_comment!(asm, "ZJIT entry point: {}", iseq_get_location(iseq, 0));
+fn gen_entry_prologue(asm: &mut Assembler, fun: &Function) {
+    asm_comment!(asm, "ZJIT entry point: {}", iseq_get_location(fun.iseq, 0));
+
+    if unsafe { get_iseq_flags_has_opt(fun.iseq) } {
+        asm_comment!(asm, "guard expected PC");
+         let expected_pc = unsafe { rb_iseq_pc_at_idx(fun.iseq, fun.start_idx) };
+         let expected_pc_opnd = Opnd::const_ptr(expected_pc as *const u8);
+         let pc_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC);
+
+         let cb = ZJITState::get_code_block();
+         let mut exit_asm = Assembler::new();
+         asm_comment!(exit_asm, "entry exit");
+         exit_asm.mov(C_RET_OPND, Opnd::UImm(Qundef.as_u64()));
+         exit_asm.cret(C_RET_OPND);
+         let exit_ptr = exit_asm.compile(cb).map(|(start_ptr, _)| start_ptr).unwrap();
+
+         asm.cmp(pc_opnd, expected_pc_opnd);
+         // TODO compile with the new PC and jump to that instead of exiting
+         asm.jne(exit_ptr.into());
+    }
+
     asm.frame_setup();
 
     // Save the registers we'll use for CFP, EP, SP
@@ -425,7 +450,8 @@ fn gen_entry_prologue(asm: &mut Assembler, iseq: IseqPtr) {
 }
 
 /// Assign method arguments to basic block arguments at JIT entry
-fn gen_method_params(asm: &mut Assembler, iseq: IseqPtr, entry_block: &Block) {
+fn gen_method_params(asm: &mut Assembler, fun: &Function) {
+    let entry_block = fun.block(BlockId(0));
     let self_param = gen_param(asm, SELF_PARAM_IDX);
     asm.mov(self_param, Opnd::mem(VALUE_BITS, CFP, RUBY_OFFSET_CFP_SELF));
 
@@ -440,7 +466,7 @@ fn gen_method_params(asm: &mut Assembler, iseq: IseqPtr, entry_block: &Block) {
 
         // Assign local variables to the basic block arguments
         for (idx, &param) in params.iter().enumerate() {
-            let local = gen_getlocal(asm, iseq, idx);
+            let local = gen_getlocal(asm, fun.iseq, idx);
             asm.load_into(param, local);
         }
     }
@@ -933,8 +959,8 @@ pub fn local_size_and_idx_to_ep_offset(local_size: usize, local_idx: usize) -> i
 }
 
 /// Convert ISEQ into High-level IR
-fn compile_iseq(iseq: IseqPtr) -> Option<Function> {
-    let mut function = match iseq_to_hir(iseq) {
+fn compile_iseq(iseq: IseqPtr, start_idx: u32) -> Option<Function> {
+    let mut function = match iseq_to_hir(iseq, start_idx) {
         Ok(function) => function,
         Err(err) => {
             debug!("ZJIT: iseq_to_hir: {err:?}");
