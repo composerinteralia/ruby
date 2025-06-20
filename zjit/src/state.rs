@@ -35,8 +35,8 @@ pub struct ZJITState {
     /// Trampoline to propagate a callee's side exit to the caller
     exit_trampoline: Option<CodePtr>,
 
-    /// Exit without side exit bookkeeping
-    entry_exit: Option<CodePtr>,
+    /// Trampoline to exit to the interpreter without any additional bookkeeping
+    entry_exit_trampoline: Option<CodePtr>,
 }
 
 /// Private singleton instance of the codegen globals
@@ -92,7 +92,7 @@ impl ZJITState {
             assert_compiles: false,
             method_annotations: cruby_methods::init(),
             exit_trampoline: None,
-            entry_exit: None,
+            entry_exit_trampoline: None,
         };
         unsafe { ZJIT_STATE = Some(zjit_state); }
 
@@ -100,8 +100,8 @@ impl ZJITState {
         let cb = ZJITState::get_code_block();
         let exit_trampoline = Self::gen_exit_trampoline(cb).unwrap();
         ZJITState::get_instance().exit_trampoline = Some(exit_trampoline);
-        let entry_exit = Self::gen_entry_exit(cb).unwrap();
-        ZJITState::get_instance().entry_exit = Some(entry_exit);
+        let entry_exit_trampoline = Self::gen_entry_exit_trampoline(cb).unwrap();
+        ZJITState::get_instance().entry_exit_trampoline = Some(entry_exit_trampoline);
     }
 
     /// Return true if zjit_state has been initialized
@@ -158,7 +158,7 @@ impl ZJITState {
     }
 
     // Generate code to side exit to the interpreter without the usual sideexit bookkeeping
-    fn gen_entry_exit(cb: &mut CodeBlock) -> Option<CodePtr> {
+    fn gen_entry_exit_trampoline(cb: &mut CodeBlock) -> Option<CodePtr> {
         let mut asm = Assembler::new();
         asm.mov(C_RET_OPND, Opnd::UImm(Qundef.as_u64()));
         asm.cret(C_RET_OPND);
@@ -166,8 +166,8 @@ impl ZJITState {
     }
 
     /// Get the entry exit to side exit without bookkeeping
-    pub fn get_entry_exit() -> CodePtr {
-        ZJITState::get_instance().entry_exit.unwrap()
+    pub fn get_entry_exit_trampoline() -> CodePtr {
+        ZJITState::get_instance().entry_exit_trampoline.unwrap()
     }
 }
 

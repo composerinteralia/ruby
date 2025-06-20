@@ -416,8 +416,8 @@ fn gen_entry_prologue(asm: &mut Assembler, fun: &Function) {
          let expected_pc_opnd = Opnd::const_ptr(expected_pc as *const u8);
          let pc_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC);
          asm.cmp(pc_opnd, expected_pc_opnd);
-         // TODO compile function for the other PC and jump to that instead of exiting
-         asm.jne(ZJITState::get_entry_exit().into());
+         // TODO compile for the other PC and jump to that instead of exiting
+         asm.jne(ZJITState::get_entry_exit_trampoline().into());
     }
 
     asm.frame_setup();
