@@ -610,6 +610,23 @@ fn gen_send_without_block_direct(
     args: &Vec<InsnId>,
     state: &FrameState,
 ) -> Option<lir::Opnd> {
+    if unsafe { get_iseq_flags_has_opt(iseq) } {
+        let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
+        let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
+        let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
+        let opt_table = opt_table.to_vec();
+
+        let opt_args = std::cmp::min(args.len(), opt_num);
+        let start_idx = opt_table[opt_args] as u32;
+
+        let expected_pc = unsafe { rb_iseq_pc_at_idx(iseq, start_idx) };
+        let expected_pc_opnd = Opnd::const_ptr(expected_pc as *const u8);
+        let pc_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC);
+        asm.cmp(pc_opnd, expected_pc_opnd);
+        // // TODO compile for the other PC and jump to that instead of exiting
+        asm.jne(side_exit(jit, state)?);
+    }
+
     // Save cfp->pc and cfp->sp for the caller frame
     gen_save_pc(asm, state);
     gen_save_sp(asm, state.stack().len() - args.len() - 1); // -1 for receiver
@@ -649,19 +666,6 @@ fn gen_send_without_block_direct(
     for &arg in args.iter() {
         c_args.push(jit.get_opnd(arg)?);
     }
-
-
-    let start_idx = if unsafe { get_iseq_flags_has_opt(iseq) } {
-        let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
-        let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
-        let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
-        let opt_table = opt_table.to_vec();
-
-        let opt_args = std::cmp::min(args.len(), opt_num);
-        opt_table[opt_args]
-        // let pc = unsafe { rb_iseq_pc_at_idx(iseq, idx as u32) };
-    } else { 0 };
-    println!("{start_idx}");
 
     // Make a method call. The target address will be rewritten once compiled.
     let branch = Branch::new();
