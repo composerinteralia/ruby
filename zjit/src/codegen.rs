@@ -406,19 +406,23 @@ fn gen_putspecialobject(asm: &mut Assembler, value_type: SpecialObjectType) -> O
     )
 }
 
+fn gen_pc_guard(asm: &mut Assembler, iseq: IseqPtr, start_idx: u32, cfp: Opnd, exit: Target) {
+    if unsafe { get_iseq_flags_has_opt(iseq) } {
+        asm_comment!(asm, "guard expected PC");
+        let expected_pc = unsafe { rb_iseq_pc_at_idx(iseq, start_idx) };
+        let expected_pc_opnd = Opnd::const_ptr(expected_pc as *const u8);
+        let pc_opnd = Opnd::mem(64, cfp, RUBY_OFFSET_CFP_PC);
+        asm.cmp(pc_opnd, expected_pc_opnd);
+        // TODO compile for the other PC and jump to that instead of exiting
+        asm.jne(exit)
+    }
+}
+
 /// Compile an interpreter entry block to be inserted into an ISEQ
 fn gen_entry_prologue(asm: &mut Assembler, fun: &Function) {
     asm_comment!(asm, "ZJIT entry point: {}", iseq_get_location(fun.iseq, 0));
 
-    if unsafe { get_iseq_flags_has_opt(fun.iseq) } {
-        asm_comment!(asm, "guard expected PC");
-         let expected_pc = unsafe { rb_iseq_pc_at_idx(fun.iseq, fun.start_idx) };
-         let expected_pc_opnd = Opnd::const_ptr(expected_pc as *const u8);
-         let pc_opnd = Opnd::mem(64, C_ARG_OPNDS[1], RUBY_OFFSET_CFP_PC);
-         asm.cmp(pc_opnd, expected_pc_opnd);
-         // TODO compile for the other PC and jump to that instead of exiting
-         asm.jne(ZJITState::get_entry_exit_trampoline().into());
-    }
+    gen_pc_guard(asm, fun.iseq, fun.start_idx, C_ARG_OPNDS[1], ZJITState::get_entry_exit_trampoline().into());
 
     asm.frame_setup();
 
@@ -610,26 +614,26 @@ fn gen_send_without_block_direct(
     args: &Vec<InsnId>,
     state: &FrameState,
 ) -> Option<lir::Opnd> {
-    if unsafe { get_iseq_flags_has_opt(iseq) } {
-        let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
-        let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
-        let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
-        let opt_table = opt_table.to_vec();
-
-        let opt_args = std::cmp::min(args.len(), opt_num);
-        let start_idx = opt_table[opt_args] as u32;
-
-        let expected_pc = unsafe { rb_iseq_pc_at_idx(iseq, start_idx) };
-        let expected_pc_opnd = Opnd::const_ptr(expected_pc as *const u8);
-        let pc_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC);
-        asm.cmp(pc_opnd, expected_pc_opnd);
-        // // TODO compile for the other PC and jump to that instead of exiting
-        asm.jne(side_exit(jit, state)?);
-    }
-
     // Save cfp->pc and cfp->sp for the caller frame
     gen_save_pc(asm, state);
     gen_save_sp(asm, state.stack().len() - args.len() - 1); // -1 for receiver
+
+    // Compile with this start_idx, and them make sure we also update the PC to point to that idx
+    // (so the check in the compiled block actually works)
+    //
+    // Code something like this needs to go somewhere in the block
+    // if unsafe { get_iseq_flags_has_opt(iseq) } {
+    //     let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
+    //     let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
+    //     let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
+    //     let opt_table = opt_table.to_vec();
+    //
+    //     let opt_args = std::cmp::min(args.len(), opt_num);
+    //     let start_idx = opt_table[opt_args] as u32;
+    //
+    //     gen_pc_guard(asm, iseq, start_idx, CFP, side_exit(jit, state)?);
+    // }
+
 
     // Spill the virtual stack and the locals of the caller onto the stack
     // TODO: Lazily materialize caller frames on side exits or when needed
