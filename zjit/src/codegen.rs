@@ -414,7 +414,7 @@ fn gen_entry_prologue(asm: &mut Assembler, fun: &Function) {
         asm_comment!(asm, "guard expected PC");
          let expected_pc = unsafe { rb_iseq_pc_at_idx(fun.iseq, fun.start_idx) };
          let expected_pc_opnd = Opnd::const_ptr(expected_pc as *const u8);
-         let pc_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC);
+         let pc_opnd = Opnd::mem(64, C_ARG_OPNDS[1], RUBY_OFFSET_CFP_PC);
          asm.cmp(pc_opnd, expected_pc_opnd);
          // TODO compile for the other PC and jump to that instead of exiting
          asm.jne(ZJITState::get_entry_exit_trampoline().into());
