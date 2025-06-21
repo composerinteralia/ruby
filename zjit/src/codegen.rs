@@ -650,6 +650,19 @@ fn gen_send_without_block_direct(
         c_args.push(jit.get_opnd(arg)?);
     }
 
+
+    let start_idx = if unsafe { get_iseq_flags_has_opt(iseq) } {
+        let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
+        let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
+        let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
+        let opt_table = opt_table.to_vec();
+
+        let opt_args = std::cmp::min(args.len(), opt_num);
+        opt_table[opt_args]
+        // let pc = unsafe { rb_iseq_pc_at_idx(iseq, idx as u32) };
+    } else { 0 };
+    println!("{start_idx}");
+
     // Make a method call. The target address will be rewritten once compiled.
     let branch = Branch::new();
     let dummy_ptr = cb.get_write_ptr().raw_ptr(cb);
