@@ -24,7 +24,7 @@ struct JITState {
     labels: Vec<Option<Target>>,
 
     /// Branches to an ISEQ that need to be compiled later
-    branch_iseqs: Vec<(Rc<Branch>, IseqPtr)>,
+    branch_iseqs: Vec<(Rc<Branch>, IseqPtr, u32)>,
 }
 
 impl JITState {
@@ -119,12 +119,12 @@ fn gen_iseq_entry_point(iseq: IseqPtr, ec: EcPtr) -> *const u8 {
     };
 
     // Recursively compile callee ISEQs
-    while let Some((branch, iseq)) = branch_iseqs.pop() {
+    while let Some((branch, iseq, start_idx)) = branch_iseqs.pop() {
         // Disable profiling. This will be the last use of the profiling information for the ISEQ.
         unsafe { rb_zjit_profile_disable(iseq); }
 
         // Compile the ISEQ
-        if let Some((callee_ptr, callee_branch_iseqs)) = gen_iseq(cb, iseq) {
+        if let Some((callee_ptr, callee_branch_iseqs)) = gen_iseq(cb, iseq, start_idx) {
             let callee_addr = callee_ptr.raw_ptr(cb);
             branch.regenerate(cb, |asm| {
                 asm.ccall(callee_addr, vec![]);
@@ -169,7 +169,7 @@ fn gen_entry(cb: &mut CodeBlock, function: &Function, function_ptr: CodePtr) -> 
 }
 
 /// Compile an ISEQ into machine code
-fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<(CodePtr, Vec<(Rc<Branch>, IseqPtr)>)> {
+fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr, start_idx: u32) -> Option<(CodePtr, Vec<(Rc<Branch>, IseqPtr, u32)>)> {
     // Return an existing pointer if it's already compiled
     let payload = get_or_create_iseq_payload(iseq);
     if let Some(start_ptr) = payload.start_ptr {
@@ -177,8 +177,6 @@ fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<(CodePtr, Vec<(Rc<Branc
     }
 
     // Convert ISEQ into High-level IR and optimize HIR
-    // TODO don't assume start_idx 0
-    let start_idx = 0;
     let function = match compile_iseq(iseq, start_idx) {
         Some(function) => function,
         None => return None,
@@ -193,7 +191,7 @@ fn gen_iseq(cb: &mut CodeBlock, iseq: IseqPtr) -> Option<(CodePtr, Vec<(Rc<Branc
 }
 
 /// Compile a function
-fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Option<(CodePtr, Vec<(Rc<Branch>, IseqPtr)>)> {
+fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Option<(CodePtr, Vec<(Rc<Branch>, IseqPtr, u32)>)> {
     let mut jit = JITState::new(iseq, function.num_insns(), function.num_blocks());
     let mut asm = Assembler::new();
 
@@ -671,10 +669,19 @@ fn gen_send_without_block_direct(
         c_args.push(jit.get_opnd(arg)?);
     }
 
+    let start_idx = if unsafe { get_iseq_flags_has_opt(iseq) } {
+        let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
+        let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
+        let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
+        let opt_table = opt_table.to_vec();
+        let opt_args = std::cmp::min(args.len(), opt_num);
+        opt_table[opt_args] as u32
+    } else { 0 };
+
     // Make a method call. The target address will be rewritten once compiled.
     let branch = Branch::new();
     let dummy_ptr = cb.get_write_ptr().raw_ptr(cb);
-    jit.branch_iseqs.push((branch.clone(), iseq));
+    jit.branch_iseqs.push((branch.clone(), iseq, start_idx));
     // TODO(max): Add a PatchPoint here that can side-exit the function if the callee messed with
     // the frame's locals
     let ret = asm.ccall_with_branch(dummy_ptr, c_args, &branch);
