@@ -612,6 +612,10 @@ fn gen_send_without_block_direct(
     args: &Vec<InsnId>,
     state: &FrameState,
 ) -> Option<lir::Opnd> {
+
+    // TODO: Should this do an arity check somehow, e.g.
+    // ./miniruby --zjit-call-threshold=1 --zjit-dump-hir -e 'def a = :a.to_sym(1,2,3,4); p a'
+
     // Save cfp->pc and cfp->sp for the caller frame
     gen_save_pc(asm, state);
     gen_save_sp(asm, state.stack().len() - args.len() - 1); // -1 for receiver
@@ -654,15 +658,21 @@ fn gen_send_without_block_direct(
 
     let start_idx = if unsafe { get_iseq_flags_has_opt(iseq) } {
         let lead_num = unsafe { get_iseq_body_param_lead_num(iseq) as usize };
-        let post_num = unsafe { get_iseq_body_param_lead_num(iseq) as usize };
         let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
+        let post_num = unsafe { get_iseq_body_param_lead_num(iseq) as usize };
+
         let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
         let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
         let opt_table = opt_table.to_vec();
+
+        // TODO Since these are u32, I should probably make sure this doesn't underflow
         let opt_args = args.len() - lead_num - post_num;
         let idx = std::cmp::min(opt_args, opt_num);
         opt_table[idx] as u32
     } else { 0 };
+    // TODO tests for lead and post
+    // TODO example that requires a guard in the direct send compiled code too
+    // ./miniruby --zjit-num-profiles=2 --zjit-call-threshold=3 --zjit-dump-hir -e 'def a(x=true) = x; def b(x) = (if x; a(false); else; a; end); b(true); b(false); p b(true); p b(false)'
 
     // Make a method call. The target address will be rewritten once compiled.
     let branch = Branch::new();
