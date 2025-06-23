@@ -616,23 +616,6 @@ fn gen_send_without_block_direct(
     gen_save_pc(asm, state);
     gen_save_sp(asm, state.stack().len() - args.len() - 1); // -1 for receiver
 
-    // Compile with this start_idx, and them make sure we also update the PC to point to that idx
-    // (so the check in the compiled block actually works)
-    //
-    // Code something like this needs to go somewhere in the block
-    // if unsafe { get_iseq_flags_has_opt(iseq) } {
-    //     let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
-    //     let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
-    //     let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
-    //     let opt_table = opt_table.to_vec();
-    //
-    //     let opt_args = std::cmp::min(args.len(), opt_num);
-    //     let start_idx = opt_table[opt_args] as u32;
-    //
-    //     gen_pc_guard(asm, iseq, start_idx, CFP, side_exit(jit, state)?);
-    // }
-
-
     // Spill the virtual stack and the locals of the caller onto the stack
     // TODO: Lazily materialize caller frames on side exits or when needed
     asm_comment!(asm, "spill locals and stack");
@@ -670,12 +653,15 @@ fn gen_send_without_block_direct(
     }
 
     let start_idx = if unsafe { get_iseq_flags_has_opt(iseq) } {
+        let lead_num = unsafe { get_iseq_body_param_lead_num(iseq) as usize };
+        let post_num = unsafe { get_iseq_body_param_lead_num(iseq) as usize };
         let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
         let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
         let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
         let opt_table = opt_table.to_vec();
-        let opt_args = std::cmp::min(args.len(), opt_num);
-        opt_table[opt_args] as u32
+        let opt_args = args.len() - lead_num - post_num;
+        let idx = std::cmp::min(opt_args, opt_num);
+        opt_table[idx] as u32
     } else { 0 };
 
     // Make a method call. The target address will be rewritten once compiled.
