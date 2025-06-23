@@ -195,6 +195,8 @@ fn gen_function(cb: &mut CodeBlock, iseq: IseqPtr, function: &Function) -> Optio
     let mut jit = JITState::new(iseq, function.num_insns(), function.num_blocks());
     let mut asm = Assembler::new();
 
+    gen_pc_guard(&mut asm, function.iseq, function.start_idx, CFP, ZJITState::get_entry_exit_trampoline().into());
+
     // Compile each basic block
     let reverse_post_order = function.rpo();
     for &block_id in reverse_post_order.iter() {
@@ -419,8 +421,6 @@ fn gen_pc_guard(asm: &mut Assembler, iseq: IseqPtr, start_idx: u32, cfp: Opnd, e
 /// Compile an interpreter entry block to be inserted into an ISEQ
 fn gen_entry_prologue(asm: &mut Assembler, fun: &Function) {
     asm_comment!(asm, "ZJIT entry point: {}", iseq_get_location(fun.iseq, 0));
-
-    gen_pc_guard(asm, fun.iseq, fun.start_idx, C_ARG_OPNDS[1], ZJITState::get_entry_exit_trampoline().into());
 
     asm.frame_setup();
 
@@ -673,6 +673,10 @@ fn gen_send_without_block_direct(
     // TODO tests for lead and post
     // TODO example that requires a guard in the direct send compiled code too
     // ./miniruby --zjit-num-profiles=2 --zjit-call-threshold=3 --zjit-dump-hir -e 'def a(x=true) = x; def b(x) = (if x; a(false); else; a; end); b(true); b(false); p b(true); p b(false)'
+    // TODO it's a bit tricky for direct sends though-we need to somehow figure out what the PC is
+    // meant to be at runtime based on the given args. We can compile it either way without too
+    // much trouble, but then if we call it with different args we'd have to do quite a bit of
+    // runtime work to check.
 
     // Make a method call. The target address will be rewritten once compiled.
     let branch = Branch::new();
