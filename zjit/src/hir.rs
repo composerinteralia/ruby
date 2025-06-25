@@ -1417,8 +1417,12 @@ impl Function {
                             // TODO(max): Allow non-iseq; cache cme
                             self.push_insn_id(block, insn_id); continue;
                         }
-                        self.push_insn(block, Insn::PatchPoint(Invariant::MethodRedefined { klass, method: mid }));
                         let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
+                        if unsafe { get_iseq_flags_has_opt(iseq) } {
+                            // TODO Allow optional arguments for direct sends
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        self.push_insn(block, Insn::PatchPoint(Invariant::MethodRedefined { klass, method: mid }));
                         if let Some(expected) = guard_equal_to {
                             self_val = self.push_insn(block, Insn::GuardBitEquals { val: self_val, expected, state });
                         }
