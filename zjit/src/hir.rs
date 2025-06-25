@@ -460,6 +460,9 @@ pub enum Insn {
     IfTrue { val: InsnId, target: BranchEdge },
     IfFalse { val: InsnId, target: BranchEdge },
 
+    // Branch on an expected PC. Used for optional arguments
+    IfPCOffset { expected_pc: *const u8, expected_insn_idx: u32, target: BranchEdge },
+
     /// Call a C function
     /// `name` is for printing purposes only
     CCall { cfun: *const u8, args: Vec<InsnId>, name: ID, return_type: Type, elidable: bool },
@@ -518,7 +521,7 @@ impl Insn {
     /// Not every instruction returns a value. Return true if the instruction does and false otherwise.
     pub fn has_output(&self) -> bool {
         match self {
-            Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_)
+            Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_) | Insn::IfPCOffset { .. }
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. }
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetGlobal { .. } => false,
@@ -620,6 +623,7 @@ impl<'a> std::fmt::Display for InsnPrinter<'a> {
             Insn::Jump(target) => { write!(f, "Jump {target}") }
             Insn::IfTrue { val, target } => { write!(f, "IfTrue {val}, {target}") }
             Insn::IfFalse { val, target } => { write!(f, "IfFalse {val}, {target}") }
+            Insn::IfPCOffset { expected_insn_idx, target, .. } => { write!(f, "IfPCOffset {expected_insn_idx}, {target}") }
             Insn::SendWithoutBlock { self_val, call_info, args, .. } => {
                 write!(f, "SendWithoutBlock {self_val}, :{}", call_info.method_name)?;
                 for arg in args {
@@ -1006,6 +1010,11 @@ impl Function {
             Jump(target) => Jump(find_branch_edge!(target)),
             IfTrue { val, target } => IfTrue { val: find!(*val), target: find_branch_edge!(target) },
             IfFalse { val, target } => IfFalse { val: find!(*val), target: find_branch_edge!(target) },
+            IfPCOffset { expected_pc, expected_insn_idx, target } => IfPCOffset {
+                expected_pc: *expected_pc,
+                expected_insn_idx: *expected_insn_idx,
+                target: find_branch_edge!(target)
+            },
             GuardType { val, guard_type, state } => GuardType { val: find!(*val), guard_type: *guard_type, state: *state },
             GuardBitEquals { val, expected, state } => GuardBitEquals { val: find!(*val), expected: *expected, state: *state },
             FixnumAdd { left, right, state } => FixnumAdd { left: find!(*left), right: find!(*right), state: *state },
@@ -1104,7 +1113,7 @@ impl Function {
         assert!(self.insns[insn.0].has_output());
         match &self.insns[insn.0] {
             Insn::Param { .. } => unimplemented!("params should not be present in block.insns"),
-            Insn::SetGlobal { .. } | Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_)
+            Insn::SetGlobal { .. } | Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_) | Insn::IfPCOffset { .. }
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. }
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } =>
@@ -1212,6 +1221,14 @@ impl Function {
                                     let param = self.blocks[target.0].params[idx];
                                     self.insn_types[param.0] = self.type_of(param).union(self.type_of(*arg));
                                 }
+                            }
+                            continue;
+                        }
+                        Insn::IfPCOffset { target: BranchEdge { target, args }, .. } => {
+                            reachable[target.0] = true;
+                            for (idx, arg) in args.iter().enumerate() {
+                                let param = self.blocks[target.0].params[idx];
+                                self.insn_types[param.0] = self.type_of(param).union(self.type_of(*arg));
                             }
                             continue;
                         }
@@ -1400,8 +1417,12 @@ impl Function {
                             // TODO(max): Allow non-iseq; cache cme
                             self.push_insn_id(block, insn_id); continue;
                         }
-                        self.push_insn(block, Insn::PatchPoint(Invariant::MethodRedefined { klass, method: mid }));
                         let iseq = unsafe { get_def_iseq_ptr((*cme).def) };
+                        if unsafe { get_iseq_flags_has_opt(iseq) } {
+                            // TODO Allow optional arguments for direct sends
+                            self.push_insn_id(block, insn_id); continue;
+                        }
+                        self.push_insn(block, Insn::PatchPoint(Invariant::MethodRedefined { klass, method: mid }));
                         if let Some(expected) = guard_equal_to {
                             self_val = self.push_insn(block, Insn::GuardBitEquals { val: self_val, expected, state });
                         }
@@ -1785,6 +1806,9 @@ impl Function {
                     worklist.push_back(val);
                     worklist.extend(args);
                 }
+                Insn::IfPCOffset { target: BranchEdge { args, .. }, .. } => {
+                    worklist.extend(args);
+                }
                 Insn::ArrayDup { val, state } | Insn::HashDup { val, state } => {
                     worklist.push_back(val);
                     worklist.push_back(state);
@@ -1870,7 +1894,7 @@ impl Function {
         let mut num_in_edges = vec![0; self.blocks.len()];
         for block in self.rpo() {
             for &insn in &self.blocks[block.0].insns {
-                if let Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } | Insn::Jump(target) = self.find(insn) {
+                if let Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } | Insn::IfPCOffset { target, .. } | Insn::Jump(target) = self.find(insn) {
                     num_in_edges[target.target.0] += 1;
                 }
             }
@@ -1920,7 +1944,7 @@ impl Function {
             stack.push((block, Action::VisitSelf));
             for insn_id in &self.blocks[block.0].insns {
                 let insn = self.find(*insn_id);
-                if let Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } | Insn::Jump(target) = insn {
+                if let Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } | Insn::IfPCOffset { target, .. } | Insn::Jump(target) = insn {
                     stack.push((target.target, Action::VisitEdges));
                 }
             }
@@ -2121,10 +2145,15 @@ fn insn_idx_at_offset(idx: u32, offset: i64) -> u32 {
     ((idx as isize) + (offset as isize)) as u32
 }
 
-fn compute_jump_targets(iseq: *const rb_iseq_t) -> Vec<u32> {
+fn compute_jump_targets(iseq: *const rb_iseq_t, opt_table: &[u32]) -> Vec<u32> {
+    let mut jump_targets = HashSet::new();
+
+    for insn_idx in opt_table.iter() {
+        jump_targets.insert(*insn_idx);
+    }
+
     let iseq_size = unsafe { get_iseq_encoded_size(iseq) };
     let mut insn_idx = 0;
-    let mut jump_targets = HashSet::new();
     while insn_idx < iseq_size {
         // Get the current pc and opcode
         let pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx) };
@@ -2232,17 +2261,29 @@ impl ProfileOracle {
 /// The index of the self parameter in the HIR function
 pub const SELF_PARAM_IDX: usize = 0;
 
+fn opt_table(iseq: *const rb_iseq_t) -> Vec<u32> {
+    if unsafe { get_iseq_flags_has_opt(iseq) } {
+        let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
+        let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
+        let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
+        opt_table.iter().map(|insn_idx| { *insn_idx as u32 }).collect()
+    } else {
+        vec![]
+    }
+}
+
 /// Compile ISEQ into High-level IR
 pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
     let payload = get_or_create_iseq_payload(iseq);
     let mut profiles = ProfileOracle::new(payload);
     let mut fun = Function::new(iseq);
     // Compute a map of PC->Block by finding jump targets
-    let jump_targets = compute_jump_targets(iseq);
+    let opt_table = opt_table(iseq);
+    let jump_targets = compute_jump_targets(iseq, &opt_table);
     let mut insn_idx_to_block = HashMap::new();
     for insn_idx in jump_targets {
         if insn_idx == 0 {
-            todo!("Separate entry block for param/self/...");
+            // TODO Separate entry block for param/self/...
         }
         insn_idx_to_block.insert(insn_idx, fun.new_block());
     }
@@ -2287,8 +2328,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
     while let Some((incoming_state, block, mut insn_idx)) = queue.pop_front() {
         if visited.contains(&block) { continue; }
         visited.insert(block);
-        let (self_param, mut state) = if insn_idx == 0 {
-            (fun.blocks[fun.entry_block.0].params[SELF_PARAM_IDX], incoming_state.clone())
+        let (self_param, mut state) = if block == fun.entry_block {
+            (fun.block(block).params[SELF_PARAM_IDX], incoming_state.clone())
         } else {
             let self_param = fun.push_insn(block, Insn::Param { idx: SELF_PARAM_IDX });
             let mut result = FrameState::new(iseq);
@@ -2303,6 +2344,29 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
             }
             (self_param, result)
         };
+
+        if block == fun.entry_block && !opt_table.is_empty() {
+            for expected_insn_idx in opt_table.iter() {
+                let target = insn_idx_to_block[expected_insn_idx];
+                let state = state.clone();
+                let expected_pc = unsafe { rb_iseq_pc_at_idx(iseq, *expected_insn_idx) as *const u8 };
+
+                if expected_insn_idx < opt_table.last().unwrap() {
+                    fun.push_insn(block, Insn::IfPCOffset {
+                        expected_pc,
+                        expected_insn_idx: *expected_insn_idx,
+                        target: BranchEdge { target, args: state.as_args(self_param) }
+                    });
+                } else {
+                    fun.push_insn(block, Insn::Jump(BranchEdge { target, args: state.as_args(self_param) }));
+                }
+            }
+
+            let target = insn_idx_to_block[&insn_idx];
+            queue.push_back((state, target, insn_idx));
+            continue;  // End the entry block
+        }
+
         // Start the block off with a Snapshot so that if we need to insert a new Guard later on
         // and we don't have a Snapshot handy, we can just iterate backward (at the earliest, to
         // the beginning of the block).
@@ -3826,6 +3890,32 @@ mod tests {
               v11:StringExact = StringCopy v10
               v13:BasicObject = SendWithoutBlock v0, :unknown_method, v4, v7, v9, v11
               Return v13
+        "#]]);
+    }
+
+    #[test]
+    fn test_optional_arguments() {
+        eval("
+            def test(a, b=true, c=foo, d=b, e) = nil
+        ");
+        assert_method_hir("test",  expect![[r#"
+            fn test:
+            bb0(v0:BasicObject, v1:BasicObject, v2:BasicObject, v3:BasicObject, v4:BasicObject, v5:BasicObject):
+              IfPCOffset 0, bb1(v0, v1, v2, v3, v4, v5)
+              IfPCOffset 4, bb2(v0, v1, v2, v3, v4, v5)
+              IfPCOffset 9, bb3(v0, v1, v2, v3, v4, v5)
+              Jump bb4(v0, v1, v2, v3, v4, v5)
+            bb1(v10:BasicObject, v11:BasicObject, v12:BasicObject, v13:BasicObject, v14:BasicObject, v15:BasicObject):
+              v17:TrueClassExact = Const Value(true)
+              Jump bb2(v10, v11, v17, v13, v14, v15)
+            bb2(v19:BasicObject, v20:BasicObject, v21:BasicObject, v22:BasicObject, v23:BasicObject, v24:BasicObject):
+              v27:BasicObject = SendWithoutBlock v19, :foo
+              Jump bb3(v19, v20, v21, v27, v23, v24)
+            bb3(v29:BasicObject, v30:BasicObject, v31:BasicObject, v32:BasicObject, v33:BasicObject, v34:BasicObject):
+              Jump bb4(v29, v30, v31, v32, v31, v34)
+            bb4(v37:BasicObject, v38:BasicObject, v39:BasicObject, v40:BasicObject, v41:BasicObject, v42:BasicObject):
+              v44:NilClassExact = Const Value(nil)
+              Return v44
         "#]]);
     }
 
