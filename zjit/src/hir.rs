@@ -2329,6 +2329,20 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
             let target = insn_idx_to_block[&insn_idx];
             if target != block {
                 if unsafe { get_iseq_flags_has_opt(iseq) } {
+
+            let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) };
+            let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) };
+            let mut opt_insn_idxes: Vec<u32> = vec![];
+            for i in 0..opt_num + 1 {
+                let insn_idx: u32 = unsafe { opt_table.offset(i as isize).read().try_into().unwrap() };
+                opt_insn_idxes.push(insn_idx);
+            }
+
+            let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) as usize };
+            let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) as *const usize };
+            let opt_table: &[usize] = unsafe { std::slice::from_raw_parts(opt_table, opt_num + 1) };
+            let opt_table: Vec<u32> = opt_table.iter().map(|insn_idx| { *insn_idx as u32 }).collect();
+
                     let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) };
                     let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) };
                     // TODO compute list of offsets once and pass it to both places

@@ -650,6 +650,13 @@ impl From<VALUE> for u16 {
     }
 }
 
+impl From<VALUE> for u32 {
+    fn from(value: VALUE) -> Self {
+        let VALUE(uimm) = value;
+        uimm.try_into().unwrap()
+    }
+}
+
 impl ID {
     // Get a debug representation of the contents of the ID. Since `str` is UTF-8
     // and IDs have encodings that are not, this is a lossy representation.
