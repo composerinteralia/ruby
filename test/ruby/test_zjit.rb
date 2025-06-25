@@ -76,6 +76,20 @@ class TestZJIT < Test::Unit::TestCase
     }
   end
 
+  def test_optional_args
+    assert_compiles '[[:a, :b], [1, :b], [1, 2]]', %q{
+       def test(a=:a, b=:b) = [a, b]
+       [test, test(1), test(1, 2)]
+    }
+  end
+
+  def test_optional_args_with_required_args
+    assert_compiles '[[1, :b, :c], [1, 2, :c], [1, 2, 3]]', %q{
+       def test(a, b=:b, c=:c) = [a, b, c]
+       [test(1), test(1, 2), test(1, 2, 3)]
+    }
+  end
+
   def test_invokebuiltin
     assert_compiles '["."]', %q{
       def test = Dir.glob(".")

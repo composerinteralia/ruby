@@ -284,7 +284,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SideExit { state } => return gen_side_exit(jit, asm, &function.frame_state(*state)),
         Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
         Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state))?,
-        Insn::GuardPC { expected_pc, target } => return gen_guard_pc(jit, asm, *expected_pc, target),
+        Insn::IfPCOffset { expected_pc, target, .. } => return gen_guard_pc(jit, asm, *expected_pc, target),
         _ => {
             debug!("ZJIT: gen_function: unexpected insn {:?}", insn);
             return None;
