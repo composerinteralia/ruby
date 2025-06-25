@@ -510,6 +510,8 @@ pub enum Insn {
     /// that can be rewritten to a side exit when the Invariant is broken.
     PatchPoint(Invariant),
 
+    GuardPC { expected_pc: *const u8, target: BranchEdge },
+
     /// Side-exit into the interpreter.
     SideExit { state: InsnId },
 }
@@ -518,7 +520,7 @@ impl Insn {
     /// Not every instruction returns a value. Return true if the instruction does and false otherwise.
     pub fn has_output(&self) -> bool {
         match self {
-            Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_)
+            Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_) | Insn::GuardPC { .. }
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. }
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } | Insn::SetGlobal { .. } => false,
@@ -1008,6 +1010,7 @@ impl Function {
             IfFalse { val, target } => IfFalse { val: find!(*val), target: find_branch_edge!(target) },
             GuardType { val, guard_type, state } => GuardType { val: find!(*val), guard_type: *guard_type, state: *state },
             GuardBitEquals { val, expected, state } => GuardBitEquals { val: find!(*val), expected: *expected, state: *state },
+            GuardPC { expected_pc, target } => GuardPC { expected_pc: *expected_pc, target: find_branch_edge!(target) },
             FixnumAdd { left, right, state } => FixnumAdd { left: find!(*left), right: find!(*right), state: *state },
             FixnumSub { left, right, state } => FixnumSub { left: find!(*left), right: find!(*right), state: *state },
             FixnumMult { left, right, state } => FixnumMult { left: find!(*left), right: find!(*right), state: *state },
@@ -1104,7 +1107,7 @@ impl Function {
         assert!(self.insns[insn.0].has_output());
         match &self.insns[insn.0] {
             Insn::Param { .. } => unimplemented!("params should not be present in block.insns"),
-            Insn::SetGlobal { .. } | Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_)
+            Insn::SetGlobal { .. } | Insn::ArraySet { .. } | Insn::Snapshot { .. } | Insn::Jump(_) | Insn::GuardPC { .. }
             | Insn::IfTrue { .. } | Insn::IfFalse { .. } | Insn::Return { .. }
             | Insn::PatchPoint { .. } | Insn::SetIvar { .. } | Insn::ArrayExtend { .. }
             | Insn::ArrayPush { .. } | Insn::SideExit { .. } =>
@@ -1212,6 +1215,14 @@ impl Function {
                                     let param = self.blocks[target.0].params[idx];
                                     self.insn_types[param.0] = self.type_of(param).union(self.type_of(*arg));
                                 }
+                            }
+                            continue;
+                        }
+                        Insn::GuardPC { target: BranchEdge { target, args }, .. } => {
+                            reachable[target.0] = true;
+                            for (idx, arg) in args.iter().enumerate() {
+                                let param = self.blocks[target.0].params[idx];
+                                self.insn_types[param.0] = self.type_of(param).union(self.type_of(*arg));
                             }
                             continue;
                         }
@@ -1785,6 +1796,9 @@ impl Function {
                     worklist.push_back(val);
                     worklist.extend(args);
                 }
+                Insn::GuardPC { target: BranchEdge { args, .. }, .. } => {
+                    worklist.extend(args);
+                }
                 Insn::ArrayDup { val, state } | Insn::HashDup { val, state } => {
                     worklist.push_back(val);
                     worklist.push_back(state);
@@ -1870,7 +1884,7 @@ impl Function {
         let mut num_in_edges = vec![0; self.blocks.len()];
         for block in self.rpo() {
             for &insn in &self.blocks[block.0].insns {
-                if let Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } | Insn::Jump(target) = self.find(insn) {
+                if let Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } | Insn::GuardPC { target, .. } | Insn::Jump(target) = self.find(insn) {
                     num_in_edges[target.target.0] += 1;
                 }
             }
@@ -1920,7 +1934,7 @@ impl Function {
             stack.push((block, Action::VisitSelf));
             for insn_id in &self.blocks[block.0].insns {
                 let insn = self.find(*insn_id);
-                if let Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } | Insn::Jump(target) = insn {
+                if let Insn::IfTrue { target, .. } | Insn::IfFalse { target, .. } | Insn::GuardPC { target, .. } | Insn::Jump(target) = insn {
                     stack.push((target.target, Action::VisitEdges));
                 }
             }
@@ -2122,9 +2136,19 @@ fn insn_idx_at_offset(idx: u32, offset: i64) -> u32 {
 }
 
 fn compute_jump_targets(iseq: *const rb_iseq_t) -> Vec<u32> {
+    let mut jump_targets = HashSet::new();
+
+    if unsafe { get_iseq_flags_has_opt(iseq) } {
+        let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) };
+        let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) };
+        for i in 0..opt_num + 1 {
+            let idx = unsafe { *opt_table.offset(i as isize) }.as_u32();
+            jump_targets.insert(idx);
+        }
+    }
+
     let iseq_size = unsafe { get_iseq_encoded_size(iseq) };
     let mut insn_idx = 0;
-    let mut jump_targets = HashSet::new();
     while insn_idx < iseq_size {
         // Get the current pc and opcode
         let pc = unsafe { rb_iseq_pc_at_idx(iseq, insn_idx) };
@@ -2241,9 +2265,6 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
     let jump_targets = compute_jump_targets(iseq);
     let mut insn_idx_to_block = HashMap::new();
     for insn_idx in jump_targets {
-        if insn_idx == 0 {
-            todo!("Separate entry block for param/self/...");
-        }
         insn_idx_to_block.insert(insn_idx, fun.new_block());
     }
 
@@ -2287,8 +2308,8 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
     while let Some((incoming_state, block, mut insn_idx)) = queue.pop_front() {
         if visited.contains(&block) { continue; }
         visited.insert(block);
-        let (self_param, mut state) = if insn_idx == 0 {
-            (fun.blocks[fun.entry_block.0].params[SELF_PARAM_IDX], incoming_state.clone())
+        let (self_param, mut state) = if block == fun.entry_block {
+            (fun.block(block).params[SELF_PARAM_IDX], incoming_state.clone())
         } else {
             let self_param = fun.push_insn(block, Insn::Param { idx: SELF_PARAM_IDX });
             let mut result = FrameState::new(iseq);
@@ -2303,6 +2324,36 @@ pub fn iseq_to_hir(iseq: *const rb_iseq_t) -> Result<Function, ParseError> {
             }
             (self_param, result)
         };
+
+        if insn_idx == 0 && insn_idx_to_block.contains_key(&insn_idx) {
+            let target = insn_idx_to_block[&insn_idx];
+            if target != block {
+                if unsafe { get_iseq_flags_has_opt(iseq) } {
+                    let opt_num = unsafe { get_iseq_body_param_opt_num(iseq) };
+                    let opt_table = unsafe { get_iseq_body_param_opt_table(iseq) };
+                    // TODO compute list of offsets once and pass it to both places
+                    for i in 0..opt_num {
+                        let idx = unsafe { *opt_table.offset(i as isize) }.as_u32();
+                        let t = insn_idx_to_block[&idx];
+                        let state = state.clone();
+                        let pc = unsafe { rb_iseq_pc_at_idx(iseq, idx) as *const u8 };
+                        fun.push_insn(block, Insn::GuardPC {
+                            expected_pc: pc,
+                            target: BranchEdge { target: t, args: state.as_args(self_param) }
+                        });
+                    }
+
+                    let idx = unsafe { *opt_table.offset(opt_num as isize) }.as_u32();
+                    let t = insn_idx_to_block[&idx];
+                    let state = state.clone();
+                    fun.push_insn(block, Insn::Jump(BranchEdge { target: t, args: state.as_args(self_param) }));
+                }
+
+                queue.push_back((state, target, insn_idx));
+                continue;  // End the block
+            }
+        }
+
         // Start the block off with a Snapshot so that if we need to insert a new Guard later on
         // and we don't have a Snapshot handy, we can just iterate backward (at the earliest, to
         // the beginning of the block).

@@ -284,6 +284,7 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
         Insn::SideExit { state } => return gen_side_exit(jit, asm, &function.frame_state(*state)),
         Insn::PutSpecialObject { value_type } => gen_putspecialobject(asm, *value_type),
         Insn::AnyToString { val, str, state } => gen_anytostring(asm, opnd!(val), opnd!(str), &function.frame_state(*state))?,
+        Insn::GuardPC { expected_pc, target } => return gen_guard_pc(jit, asm, *expected_pc, target),
         _ => {
             debug!("ZJIT: gen_function: unexpected insn {:?}", insn);
             return None;
@@ -294,6 +295,17 @@ fn gen_insn(cb: &mut CodeBlock, jit: &mut JITState, asm: &mut Assembler, functio
 
     // If the instruction has an output, remember it in jit.opnds
     jit.opnds[insn_id.0] = Some(out_opnd);
+
+    Some(())
+}
+
+fn gen_guard_pc(jit: &mut JITState, asm: &mut Assembler, expected_pc: *const u8, branch: &BranchEdge) -> Option<()> {
+    let pc_opnd = Opnd::mem(64, CFP, RUBY_OFFSET_CFP_PC);
+    let expected_pc_opnd = Opnd::const_ptr(expected_pc);
+    let target = jit.get_label(asm, branch.target);
+
+    asm.cmp(pc_opnd, expected_pc_opnd);
+    asm.je(target);
 
     Some(())
 }
