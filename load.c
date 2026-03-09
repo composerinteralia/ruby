@@ -1304,6 +1304,7 @@ require_internal(rb_execution_context_t *ec, VALUE fname, int exception, bool wa
     VALUE realpath_map = box->loaded_features_realpath_map;
     volatile bool reset_ext_config = false;
     volatile struct rb_ext_config prev_ext_config;
+    rb_control_frame_t *volatile cfp = ec->cfp;
 
     path = rb_str_encode_ospath(fname);
     RUBY_DTRACE_HOOK(REQUIRE_ENTRY, RSTRING_PTR(fname));
@@ -1351,6 +1352,8 @@ require_internal(rb_execution_context_t *ec, VALUE fname, int exception, bool wa
                 result = TAG_RETURN;
             }
         }
+    } else {
+        rb_vm_rewind_cfp(ec, cfp);
     }
     EC_POP_TAG();
 

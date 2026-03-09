@@ -814,6 +814,14 @@ load_encoding(const char *name)
     ruby_debug = Qfalse;
     errinfo = rb_errinfo();
     loaded = rb_require_internal_silent(enclib); // must run without VM_LOCK
+    if (loaded > 1) {
+        VALUE exc = rb_errinfo();
+        if (!rb_obj_is_kind_of(exc, rb_eLoadError)) {
+            rb_set_errinfo(errinfo);
+            rb_exc_raise(exc);
+        }
+    }
+
     ruby_debug = debug;
     rb_set_errinfo(errinfo);
 
